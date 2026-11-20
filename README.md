@@ -94,6 +94,6 @@ cd ..
 
 ## 许可
 
-[GPL-3.0](LICENSE)，Copyright (C) 2026 feiyu。
+[GPL-3.0](LICENSE)，Copyright (C) 2026 Rippleleaf。
 
 依赖的 BaseLib 与 RitsuLib 版权归各自作者，遵循其原许可证。
