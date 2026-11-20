@@ -30,7 +30,7 @@
 
 ### 手动安装
 
-1. 从 [Releases](../../releases) 下载最新 zip
+1. 从 [Releases](/releases) 下载最新 zip
 2. 解压到 `...\steamapps\common\Slay the Spire 2\mods\BlockPreview\`
    （文件夹名**必须**是 `BlockPreview`，与 `BlockPreview.json` 里的 `id` 一致）
 3. 确认 `BlockPreview.dll` / `.pck` / `.json` 三个文件在同一层，不要套子文件夹
