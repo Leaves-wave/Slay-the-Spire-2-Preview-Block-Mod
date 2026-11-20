@@ -1,0 +1,12 @@
+<Project>
+    <!-- 复制本文件为 Directory.Build.props 后按本机路径修改；目录里的 .gitignore 已忽略真文件。 -->
+    <PropertyGroup>
+        <!-- MegaDot 当前 4.5.1；Godot 版本比游戏更新会导致 .pck 不被加载 -->
+        <GodotPath>C:/megadot/MegaDot_v4.5.1-stable_mono_win64.exe</GodotPath>
+        <!-- Linux: /usr/lib/megadot/MegaDot_v4.5.1-stable_mono_linux.x86_64 -->
+        <!-- macOS: /Users/user/Applications/Megadot.app/Contents/MacOS/Godot -->
+
+        <!-- 游戏没被自动找到时，取消注释并手动指定 -->
+        <!-- <Sts2Path>?/steamapps/common/Slay the Spire 2</Sts2Path> -->
+    </PropertyGroup>
+</Project>
