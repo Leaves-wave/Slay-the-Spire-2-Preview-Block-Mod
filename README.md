@@ -28,6 +28,8 @@
 
 在 Steam 创意工坊订阅本 mod，同时订阅 **BaseLib**。
 
+- 工坊页面：https://steamcommunity.com/sharedfiles/filedetails/?id=3842923799
+
 ### 手动安装
 
 1. 从 [Releases](/releases) 下载最新 zip
