@@ -22,3 +22,15 @@ Sts2PathDiscovery.props.user
 *.dll
 *.pck
 *.pdb
+
+# 内部资料与发布脚本（本机保留，不进开源仓库）
+# 实际文件已移到 STS2ModDev/_内部文档/，这里只是防止误放回来
+发布流程.md
+上传工坊.cmd
+upload-workshop.ps1
+估算行设定.md
+充能球推演.md
+待开发遗物.md
+性能优化.md
+设计说明.md
+遗物接入.md
