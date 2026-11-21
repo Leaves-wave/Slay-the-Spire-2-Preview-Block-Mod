@@ -2815,7 +2815,19 @@ public static class BlockPreviewDisplay
             && card.DynamicVars.TryGetValue("Summon", out var summonVar)
             && summonVar is SummonVar summon)
         {
-            total += Math.Max(0, summon.IntValue) * totalPlays;
+            int perPlay = Math.Max(0, summon.IntValue);
+            int plays = totalPlays;
+
+            // X 费牌（挽歌 `Dirge`）：`OnPlay` 里是 `for (i < X) Summon(Summon.BaseValue)`，
+            // 所以总量 = 召唤量 × X，只算一次会少算 X 倍。
+            // 重放时能量已在第一次就耗尽了（第二次 X=0），因此 X 费只按第一次播放算。
+            if (card.EnergyCost.CostsX)
+            {
+                perPlay *= EstimateXValue(card);
+                plays = 1;
+            }
+
+            total += perPlay * plays;
         }
 
         var devour = creature?.GetPower<DevourLifePower>();

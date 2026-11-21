@@ -3,7 +3,7 @@
   "name": "格挡预览 Block Preview",
   "author": "Rippleleaf",
   "description": "拖出卡牌时，在玩家血条右侧显示本次获得的格挡与结算后的总格挡（+X = Y）。可在 Mod 设置里开关、调节位置与大小。",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "min_game_version": "0.113.0",
   "has_pck": true,
   "has_dll": true,
