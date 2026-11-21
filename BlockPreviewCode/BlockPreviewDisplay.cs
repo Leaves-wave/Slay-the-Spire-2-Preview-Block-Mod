@@ -2851,6 +2851,34 @@ public static class BlockPreviewDisplay
             total += souls * devour.Amount;
         }
 
+        // 紧追不放（SicEmPower）：奥斯提攻击**带有该状态的敌人**时，
+        // 每次伤害都会触发一次 `OstyCmd.Summon(层数)`（`SicEmPower.AfterDamageGiven`）。
+        // 状态是 `InstancedPerApplier`，只认玩家自己挂的那一份。
+        // 注意它和牌自带的 SummonVar 是**叠加**关系（打「紧追不放」本身也会先吃到旧层数）。
+        if (card.Tags.Contains(CardTag.OstyAttack))
+        {
+            var sicEmTarget = GetHoverTarget(card);
+
+            if (sicEmTarget != null)
+            {
+                int stacks = 0;
+
+                foreach (var power in sicEmTarget.GetPowerInstances<SicEmPower>())
+                {
+                    if (power.Applier == card.Owner?.Creature)
+                    {
+                        stacks += power.Amount;
+                    }
+                }
+
+                if (stacks > 0)
+                {
+                    // 多段奥斯提攻击每次伤害都触发
+                    total += stacks * GetCardHitCount(card) * totalPlays;
+                }
+            }
+        }
+
         if (total <= 0)
         {
             return 0;
