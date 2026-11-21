@@ -35,6 +35,26 @@ public class BlockPreviewConfig : SimpleModConfig
     [ConfigSlider(0.5, 3.0, 0.05)]
     public static double Scale { get; set; } = 1.2;
 
+    /// <summary>
+    /// 强固定 UI：开启后面板固定在屏幕坐标（用上面的 水平/垂直偏移），
+    /// **不再跟随玩家血条移动**——Boss 把角色拖到别处时位置也不变。
+    /// 关掉时沿用原来的「血条右侧 + 偏移」。
+    /// </summary>
+    public static bool PinToScreen { get; set; } = false;
+
+    /// <summary>
+    /// 选牌 / 弃牌 / 替换 / 消耗等**二级界面**里，面板的屏幕 X 坐标。
+    ///
+    /// 这些界面会占据屏幕中央，所以面板不再跟随血条，而是钉在你设的位置；
+    /// 在调整模式里直接拖面板即可覆盖这两个值。
+    /// </summary>
+    [ConfigSlider(0, 3840, 1)]
+    public static int SelectScreenX { get; set; } = 40;
+
+    /// <summary>同上，Y 坐标（默认靠近屏幕底部）。</summary>
+    [ConfigSlider(0, 2160, 1)]
+    public static int SelectScreenY { get; set; } = 860;
+
 
 
     /// <summary>

@@ -36,6 +36,9 @@ internal static class ConfigLocalization
         ("OffsetX", "Horizontal offset", "水平偏移"),
         ("OffsetY", "Vertical offset", "垂直偏移"),
         ("Scale", "UI scale", "界面缩放"),
+        ("PinToScreen", "Pin UI to screen", "强固定 UI"),
+        ("SelectScreenX", "Secondary UI X", "进入二级UI位置 X"),
+        ("SelectScreenY", "Secondary UI Y", "进入二级UI位置 Y"),
         ("ShowEstimateLine", "Show estimate line", "显示估算行"),
 
         // 各段显示开关
@@ -140,6 +143,9 @@ internal static class ConfigLocalization
         ("OffsetX", "水平偏移", "水平オフセット", "가로 오프셋"),
         ("OffsetY", "垂直偏移", "垂直オフセット", "세로 오프셋"),
         ("Scale", "介面縮放", "UI スケール", "UI 크기"),
+        ("PinToScreen", "強固定 UI", "UI を画面に固定", "UI 고정"),
+        ("SelectScreenX", "進入二級UI位置 X", "サブ画面 UI X", "보조 화면 UI X"),
+        ("SelectScreenY", "進入二級UI位置 Y", "サブ画面 UI Y", "보조 화면 UI Y"),
         ("ShowEstimateLine", "顯示估算行", "推定行を表示", "추정 행 표시"),
 
         ("ShowHandBlock", "顯示選中手牌格擋", "選択中の手札のブロックを表示", "선택한 카드의 방어도 표시"),

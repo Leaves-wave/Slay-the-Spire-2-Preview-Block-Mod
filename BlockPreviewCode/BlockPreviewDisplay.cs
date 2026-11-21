@@ -6,6 +6,7 @@ using System.Reflection;
 using Godot;
 using MegaCrit.Sts2.Core.CardSelection;
 using MegaCrit.Sts2.Core.Combat;
+using MegaCrit.Sts2.Core.Combat.History;
 using MegaCrit.Sts2.Core.Combat.History.Entries;
 using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Entities.Cards;
@@ -23,8 +24,15 @@ using MegaCrit.Sts2.Core.Models.Powers;
 using MegaCrit.Sts2.Core.Models.Relics;
 using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Combat;
+using MegaCrit.Sts2.Core.Nodes.HoverTips;
+using MegaCrit.Sts2.Core.Nodes.Relics;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
+using MegaCrit.Sts2.Core.Nodes.Screens;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
+using MegaCrit.Sts2.Core.Nodes.Screens.InspectScreens;
+using MegaCrit.Sts2.Core.Nodes.Screens.Map;
+using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
+using MegaCrit.Sts2.Core.Nodes.Screens.Settings;
 using MegaCrit.Sts2.Core.ValueProps;
 
 namespace BlockPreview.BlockPreviewCode;
@@ -572,6 +580,16 @@ public static class BlockPreviewDisplay
         _playerBar = bar;
         _playerCreature = creature;
 
+        // 诊断：确认绑到的确实是玩家自己的血条（而不是奥斯提那种宠物血条）。
+        // 每场战斗一条，成本可忽略，出问题时能直接从 godot.log 对上。
+        try
+        {
+            BlockPreviewLog.Perf($"[诊断] 绑定血条: creature={creature.Name} isPlayer={creature.IsPlayer} barPos={bar.GlobalPosition}");
+        }
+        catch
+        {
+        }
+
         // 新战斗：旧的 CardPile 实例已经废了，退订它们的 ContentsChanged 并清缓存，
         // 否则会一直持有旧堆引用（泄漏），而且事件还在往失效的对象上挂。
         ResetPileStats();
@@ -670,6 +688,8 @@ public static class BlockPreviewDisplay
     private static long _perfSnapBuildMaxUs;
     private static long _perfTickSkipped;
     private static long _perfPileRebuild;
+    private static long _perfPileRebuildTotalUs;
+    private static long _perfPileRebuildMaxUs;
     private static long _perfPersistentCount;
     private static long _perfPersistentTotalUs;
     private static long _perfPersistentMaxUs;
@@ -693,6 +713,29 @@ public static class BlockPreviewDisplay
         if (us > _perfRefreshMaxUs)
         {
             _perfRefreshMaxUs = us;
+        }
+
+        // 慢刷新明细：单次 refresh 超过 2ms 时单独记一行。
+        // 用来定位「大量加牌 / 洗牌 / 塞眩晕」这类牌堆剧变场景下的卡顿到底落在哪：
+        // 如果这行显示牌堆规模正常、重算次数为 0，说明慢的不是牌堆统计。
+        if (us >= 2000 && _playerCreature?.Player != null)
+        {
+            try
+            {
+                var player = _playerCreature.Player;
+
+                int draw = PileType.Draw.GetPile(player).Cards.Count;
+                int discard = PileType.Discard.GetPile(player).Cards.Count;
+                int hand = PileType.Hand.GetPile(player).Cards.Count;
+
+                BlockPreviewLog.Perf(
+                    $"[{MainFile.ModId}] 慢刷新 {us / 1000.0:F2}ms | 抽牌堆 {draw} 弃牌堆 {discard} 手牌 {hand}"
+                    + $" | 牌堆重算 {_perfPileRebuild}次 | 历史 {HistoryEntryCount()}条");
+            }
+            catch
+            {
+                // 日志绝不影响游戏
+            }
         }
     }
 
@@ -813,13 +856,18 @@ public static class BlockPreviewDisplay
             : 0;
         double persistentMax = _perfPersistentMaxUs / 1000.0;
 
+        double pileAvg = _perfPileRebuild > 0
+            ? _perfPileRebuildTotalUs / 1000.0 / _perfPileRebuild
+            : 0;
+        double pileMax = _perfPileRebuildMaxUs / 1000.0;
+
         BlockPreviewLog.Perf(
             $"[{MainFile.ModId}] 性能({elapsedMs}ms): "
             + $"refresh {_perfRefreshCount}次({refreshHz:F1}Hz) 均{refreshAvg:F2}ms 峰{refreshMax:F2}ms | "
             + $"persistent {_perfPersistentCount}次 均{persistentAvg:F2}ms 峰{persistentMax:F2}ms | "
             + $"show {_perfShowCount}次 均{showAvg:F2}ms 峰{showMax:F2}ms | "
             + $"快照 命中{_perfSnapHit}/重建{_perfSnapRebuild}({hitRate:F0}%) 重建均{snapAvg:F2}ms 峰{snapMax:F2}ms | "
-            + $"节流跳过{_perfTickSkipped}次 | 牌堆重算{_perfPileRebuild}次 | 历史{HistoryEntryCount()}条");
+            + $"节流跳过{_perfTickSkipped}次 | 牌堆重算{_perfPileRebuild}次 均{pileAvg:F2}ms 峰{pileMax:F2}ms | 历史{HistoryEntryCount()}条");
 
         _perfRefreshCount = 0;
         _perfRefreshTotalUs = 0;
@@ -833,6 +881,8 @@ public static class BlockPreviewDisplay
         _perfSnapBuildMaxUs = 0;
         _perfTickSkipped = 0;
         _perfPileRebuild = 0;
+        _perfPileRebuildTotalUs = 0;
+        _perfPileRebuildMaxUs = 0;
         _perfPersistentCount = 0;
         _perfPersistentTotalUs = 0;
         _perfPersistentMaxUs = 0;
@@ -933,18 +983,41 @@ public static class BlockPreviewDisplay
         var side = state.CurrentSide;
         int turnSig = TurnSignature(state);
 
-        // 换回合 / 换阵营 / 任何一个玩家 TurnNumber 变化时，即使条目数没变，
-        // 「本回合」相关的结果也会全变（见 CombatHistoryEntry.HappenedThisTurn）。
-        if (version != _histSnapVersion
-            || state.RoundNumber != _histSnapRound
-            || !Equals(side, _histSnapSide)
-            || turnSig != _histSnapTurnSig)
+        // 换回合 / 换阵营 / 任何一个玩家 TurnNumber 变化 / 历史被截断
+        // → 即使条目数没变，「本回合」相关的结果也会全变，必须全量重算。
+        bool hardReset = version < _histSnapVersion
+                         || state.RoundNumber != _histSnapRound
+                         || !Equals(side, _histSnapSide)
+                         || turnSig != _histSnapTurnSig;
+
+        if (hardReset)
         {
-            _histSnapVersion = version;
+            _histSnaps.Clear();
+
             _histSnapRound = state.RoundNumber;
             _histSnapSide = side;
             _histSnapTurnSig = turnSig;
-            _histSnaps.Clear();
+            _histSnapVersion = version;
+        }
+
+        // 只有「本回合内条目增加」这一种情况可以走增量：
+        // 把所有已有玩家的快照一起往前推进（一次扫描覆盖全部玩家），
+        // 成本是 O(新增条目)，与历史总长度无关。
+        if (!hardReset && version > _histSnapVersion && _histSnaps.Count > 0)
+        {
+            long incStart = Stopwatch.GetTimestamp();
+
+            foreach (var kv in _histSnaps)
+            {
+                AccumulateHistory(state, kv.Key, kv.Value, _histSnapVersion);
+            }
+
+            if (PerfLogEnabled)
+            {
+                PerfRecordSnapBuild(PerfToUs(Stopwatch.GetTimestamp() - incStart));
+            }
+
+            _histSnapVersion = version;
         }
 
         if (_histSnaps.TryGetValue(player, out var cached))
@@ -954,7 +1027,8 @@ public static class BlockPreviewDisplay
         }
 
         long perfStart = Stopwatch.GetTimestamp();
-        var snap = BuildHistorySnapshot(state, player);
+        var snap = new HistorySnapshot();
+        AccumulateHistory(state, player, snap, 0);
 
         if (PerfLogEnabled)
         {
@@ -965,95 +1039,124 @@ public static class BlockPreviewDisplay
         return snap;
     }
 
-    private static HistorySnapshot BuildHistorySnapshot(ICombatState state, Player player)
+    /// <summary>
+    /// 把 `fromIndex` 之后的新条目累加进快照（`fromIndex = 0` 即全量）。
+    ///
+    /// 为什么要增量：`Entries` 每打一张牌就增长，旧实现「条目数一变就全量重扫」，
+    /// 到后期历史四五百条时单次重建要 5ms 以上（实测慢刷新 **5.52ms @ 508 条**）。
+    /// 现在只扫新增的那几条，重建成本与历史总长度无关。
+    /// </summary>
+    private static void AccumulateHistory(ICombatState state, Player player, HistorySnapshot snap, int fromIndex)
     {
-        var snap = new HistorySnapshot();
-
         try
         {
-            foreach (var entry in CombatManager.Instance.History.Entries)
+            var entries = CombatManager.Instance.History.Entries;
+
+            // 底层是 List<T>，能拿到索引就从 fromIndex 开始，O(新增条目)
+            if (entries is IList<CombatHistoryEntry> list)
             {
-                switch (entry)
+                for (int i = Math.Max(0, fromIndex); i < list.Count; i++)
                 {
-                    case CardPlayFinishedEntry play:
-                    {
-                        var card = play.CardPlay.Card;
-
-                        // 本场（不限回合）是否打出过能力牌：永冻冰晶用
-                        if (card.Owner == player && card.Type == CardType.Power)
-                        {
-                            snap.PowerPlayedEver = true;
-                        }
-
-                        if (play.CardPlay.Player == player
-                            && card.Type == CardType.Attack
-                            && play.HappenedThisTurn(state))
-                        {
-                            snap.AttackPlaysThisTurn++;
-                            snap.AttackPlayedThisTurn = true;
-                        }
-
-                        break;
-                    }
-
-                    case BlockGainedEntry block:
-                    {
-                        // 本回合已结算过几次「卡牌/怪物行动」来源的格挡：不动（Immovable）用
-                        if (block.CardPlay != null
-                            && block.CardPlay.Player.Creature == player.Creature
-                            && block.Props.IsCardOrMonsterMove()
-                            && block.HappenedThisTurn(state))
-                        {
-                            snap.CardBlockGainedThisTurn++;
-                        }
-
-                        break;
-                    }
-
-                    case PowerReceivedEntry power:
-                    {
-                        // 本回合是否由自己施加过灾厄：灾厄之衣用
-                        if (power.Applier == player.Creature
-                            && power.Power is DoomPower
-                            && power.HappenedThisTurn(state))
-                        {
-                            snap.DoomAppliedThisTurn = true;
-                        }
-
-                        break;
-                    }
-
-                    case CardGeneratedEntry generated:
-                    {
-                        // 本回合是否已经生成过牌：君王矿石（每回合第一次生成牌）用
-                        if (generated.Creator == player
-                            && generated.HappenedThisTurn(state))
-                        {
-                            snap.CardGeneratedThisTurn = true;
-                        }
-
-                        break;
-                    }
-
-                    case OrbChanneledEntry channeled:
-                    {
-                        // 本场累计生成过多少闪电球：Voltaic 的 CalculatedChannels 用
-                        if (channeled.Actor.Player == player && channeled.Orb is LightningOrb)
-                        {
-                            snap.LightningChannelsEver++;
-                        }
-
-                        break;
-                    }
+                    AccumulateEntry(state, player, snap, list[i]);
                 }
+
+                return;
+            }
+
+            // 兜底：拿不到索引就整体枚举（极少发生）
+            int index = 0;
+
+            foreach (var entry in entries)
+            {
+                if (index++ < fromIndex)
+                {
+                    continue;
+                }
+
+                AccumulateEntry(state, player, snap, entry);
             }
         }
         catch (Exception e)
         {
             GD.Print($"[{MainFile.ModId}] 历史快照失败: {e.Message}");
         }
+    }
 
-        return snap;
+    private static void AccumulateEntry(ICombatState state, Player player, HistorySnapshot snap, CombatHistoryEntry entry)
+    {
+        switch (entry)
+        {
+            case CardPlayFinishedEntry play:
+            {
+                var card = play.CardPlay.Card;
+
+                // 本场（不限回合）是否打出过能力牌：永冻冰晶用
+                if (card.Owner == player && card.Type == CardType.Power)
+                {
+                    snap.PowerPlayedEver = true;
+                }
+
+                if (play.CardPlay.Player == player
+                    && card.Type == CardType.Attack
+                    && play.HappenedThisTurn(state))
+                {
+                    snap.AttackPlaysThisTurn++;
+                    snap.AttackPlayedThisTurn = true;
+                }
+
+                break;
+            }
+
+            case BlockGainedEntry block:
+            {
+                // 本回合已结算过几次「卡牌/怪物行动」来源的格挡：不动（Immovable）用
+                if (block.CardPlay != null
+                    && block.CardPlay.Player.Creature == player.Creature
+                    && block.Props.IsCardOrMonsterMove()
+                    && block.HappenedThisTurn(state))
+                {
+                    snap.CardBlockGainedThisTurn++;
+                }
+
+                break;
+            }
+
+            case PowerReceivedEntry power:
+            {
+                // 本回合是否由自己施加过灾厄：灾厄之衣用
+                if (power.Applier == player.Creature
+                    && power.Power is DoomPower
+                    && power.HappenedThisTurn(state))
+                {
+                    snap.DoomAppliedThisTurn = true;
+                }
+
+                break;
+            }
+
+            case CardGeneratedEntry generated:
+            {
+                // 本回合是否已经生成过牌：君王矿石（每回合第一次生成牌）用
+                if (generated.Creator == player
+                    && generated.HappenedThisTurn(state))
+                {
+                    snap.CardGeneratedThisTurn = true;
+                }
+
+                break;
+            }
+
+            case OrbChanneledEntry channeled:
+            {
+                // 本场累计生成过多少闪电球：Voltaic 的 CalculatedChannels 用
+                if (channeled.Actor.Player == player && channeled.Orb is LightningOrb)
+                {
+                    snap.LightningChannelsEver++;
+                }
+
+                break;
+            }
+        }
     }
 
     // ==================================================================
@@ -1087,14 +1190,22 @@ public static class BlockPreviewDisplay
     private static readonly Dictionary<CardPile, PileStats> _pileStats = new();
     private static readonly HashSet<CardPile> _watchedPiles = new();
 
+    /// <summary>牌堆内容变过、需要重建缓存。</summary>
+    private static bool _pileStatsDirty = true;
+
     /// <summary>
-    /// 任何一个受监视的牌堆内容变了，就把**全部**缓存清掉。
-    /// 用无捕获的方法引用是为了能正常 `-=` 退订；
-    /// 受监视的堆只有 2~3 个，全部重算的代价远小于维护每个堆的脏标记。
+    /// 任何一个受监视的牌堆内容变了 → 只**置脏**，不立即清空。
+    ///
+    /// 为什么不能直接 Clear：**洗牌会连续触发很多次 `ContentsChanged`**，
+    /// 每清一次，下一次 `GetPileStats` 就要重新遍历整堆 + 重算所向无敌的 `Hook.ModifyBlock`，
+    /// 洗牌瞬间就会出现多次全量重算（实测洗牌时 `persistent` 出现过 3ms 的峰值）。
+    /// 置脏后由 `GetPileStats` 在**本帧第一次**调用时统一清一次，一帧最多重建一遍。
+    ///
+    /// 用无捕获的方法引用是为了能正常 `-=` 退订。
     /// </summary>
     private static void OnAnyPileChanged()
     {
-        _pileStats.Clear();
+        _pileStatsDirty = true;
     }
 
     private static void WatchPile(CardPile pile)
@@ -1122,6 +1233,7 @@ public static class BlockPreviewDisplay
 
         _watchedPiles.Clear();
         _pileStats.Clear();
+        _pileStatsDirty = true;
     }
 
     /// <summary>
@@ -1136,6 +1248,14 @@ public static class BlockPreviewDisplay
 
         WatchPile(pile);
 
+        // 有牌堆变过 → 统一清一次（见 OnAnyPileChanged 的说明：
+        // 洗牌会连发很多次事件，只在这里清，保证一帧最多重建一遍）
+        if (_pileStatsDirty)
+        {
+            _pileStats.Clear();
+            _pileStatsDirty = false;
+        }
+
         if (_pileStats.TryGetValue(pile, out var cached) && cached.Total == pile.Cards.Count)
         {
             return cached;
@@ -1149,10 +1269,7 @@ public static class BlockPreviewDisplay
     /// <summary>一次遍历同时算出四项统计 —— 这就是"共享遍历"。</summary>
     private static PileStats BuildPileStats(CardPile pile)
     {
-        if (PerfLogEnabled)
-        {
-            _perfPileRebuild++;
-        }
+        long perfStart = PerfLogEnabled ? Stopwatch.GetTimestamp() : 0;
 
         var stats = new PileStats();
 
@@ -1184,6 +1301,19 @@ public static class BlockPreviewDisplay
                     // 敏捷 / 脆弱 / 不动 / 融入暗影等修正都能算进来。
                     stats.InvincibleBlock = ComputeCardBlockValue(invincible, blockVar);
                 }
+            }
+        }
+
+        if (PerfLogEnabled)
+        {
+            long us = PerfToUs(Stopwatch.GetTimestamp() - perfStart);
+
+            _perfPileRebuild++;
+            _perfPileRebuildTotalUs += us;
+
+            if (us > _perfPileRebuildMaxUs)
+            {
+                _perfPileRebuildMaxUs = us;
             }
         }
 
@@ -1289,6 +1419,13 @@ public static class BlockPreviewDisplay
 
         if (!IsBarAlive())
         {
+            // 不在战斗界面（血条被隐藏）→ 顺手把面板收起来，
+            // 避免它停在上一个界面留下的“显示中”状态
+            if (_panel != null && GodotObject.IsInstanceValid(_panel) && _panel.Visible)
+            {
+                _panel.Visible = false;
+            }
+
             return;
         }
 
@@ -1393,6 +1530,26 @@ public static class BlockPreviewDisplay
         Vector2 offset = panelPosition - GetAnchor();
         double x = Math.Round(offset.X);
         double y = Math.Round(offset.Y);
+
+        // 强固定模式：面板挂在屏幕层上，拖到的位置**就是屏幕坐标**，直接保存
+        if (BlockPreviewConfig.PinToScreen)
+        {
+            BlockPreviewConfig.OffsetX = Math.Round(panelPosition.X);
+            BlockPreviewConfig.OffsetY = Math.Round(panelPosition.Y);
+            return;
+        }
+
+        // 选牌 / 弃牌 / 替换 / 消耗等二级界面：面板钉在屏幕坐标上，单独保存
+        if (IsCardSelectScreenVisible())
+        {
+            Vector2 global = _panel != null && GodotObject.IsInstanceValid(_panel)
+                ? _panel.GlobalPosition
+                : panelPosition;
+
+            BlockPreviewConfig.SelectScreenX = (int)Math.Round(global.X);
+            BlockPreviewConfig.SelectScreenY = (int)Math.Round(global.Y);
+            return;
+        }
 
         string key = CurrentCharacterKey();
 
@@ -1556,6 +1713,20 @@ public static class BlockPreviewDisplay
     {
         if (!IsBarAlive())
         {
+            return;
+        }
+
+        // 遗物详情 / 生物状态栏 / 单个状态图标出现时先让位，
+        // 否则面板的 ZIndex=100 会盖在它们上面（用户反馈 2026-11-21）。
+        // 另外「点开某个遗物」的查看界面、牌组查看、地图、设置、牌堆浏览
+        // 都会盖住面板，也一并让位。
+        if (IsBlockingHoverTipVisible() || IsInspectRelicScreenVisible() || IsFullScreenOverlayVisible())
+        {
+            if (_panel != null && GodotObject.IsInstanceValid(_panel) && _panel.Visible)
+            {
+                _panel.Visible = false;
+            }
+
             return;
         }
 
@@ -7185,16 +7356,279 @@ public static class BlockPreviewDisplay
         }
     }
 
+    /// <summary>
+    /// `NHoverTipSet` 的私有静态字典（owner → 正在显示的提示）。
+    ///
+    /// 游戏的悬停提示都走这一套：遗物详情、卡牌、能量、牌堆、结束回合按钮……
+    /// ⚠️ 不能「有提示就隐藏面板」——那样悬停任何东西面板都会消失（2026-11-21 踩过）。
+    /// 这里只认 **`NRelic`**（遗物详情），局面其它小提示不抢位置。
+    /// </summary>
+    private static readonly FieldInfo? _activeHoverTipsField =
+        typeof(NHoverTipSet).GetField("_activeHoverTips", BindingFlags.NonPublic | BindingFlags.Static);
+
+    private static string _lastTipOwnerDesc = string.Empty;
+    private static string _lastLayoutMode = string.Empty;
+
+    private static string _lastTipHitDesc = string.Empty;
+
+    /// <summary>诊断：让位判据命中时打一行（只在变化时），确认面板到底有没有被判定为"该让位"。</summary>
+    private static void LogTipHit(Node owner)
+    {
+        try
+        {
+            string desc = $"{owner.GetType().Name} ({owner.Name})";
+
+            if (desc != _lastTipHitDesc)
+            {
+                _lastTipHitDesc = desc;
+                BlockPreviewLog.Perf($"[诊断] 让位命中: {desc} | path={owner.GetPath()}");
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static bool IsBlockingHoverTipVisible()
+    {
+        try
+        {
+            if (_activeHoverTipsField?.GetValue(null) is System.Collections.IDictionary tips)
+            {
+                foreach (var owner in tips.Keys)
+                {
+                    // 诊断：把悬停提示的 owner 打到 godot.log（只在新类型时打一行）。
+                    // `Control` 这种匿名实例光看类型分不出来，所以把节点路径一起打出来。
+                    if (owner is Node tipNode)
+                    {
+                        string desc = $"{tipNode.GetType().Name} ({tipNode.Name})";
+
+                        if (desc != _lastTipOwnerDesc)
+                        {
+                            _lastTipOwnerDesc = desc;
+                            BlockPreviewLog.Perf($"[诊断] 悬停提示 owner: {desc} | path={tipNode.GetPath()}");
+                        }
+                    }
+
+                    // 只让「体积大、确实会被压住」的提示：
+                    //   · NInspectRelicScreen / NRelicInventoryHolder / NRelic —— 遗物详情
+                    //   · NCreature / NPowerContainer / NPower             —— 生物状态栏 / 状态图标容器
+                    // 卡牌 / 能量 / 牌堆按钮 / 结束回合这些小提示**不抢位置**，
+                    // 否则鼠标扫过任何东西面板都会闪没（2026-11-21 踩过）。
+                    if (owner is NInspectRelicScreen or NRelicInventoryHolder or NRelic
+                        or NPowerContainer or NCreature or NPower
+                        && owner is Control control
+                        && GodotObject.IsInstanceValid(control)
+                        && control.IsVisibleInTree())
+                    {
+                        return true;
+                    }
+
+                    // 生物（人物 / 奥斯提 / 怪物）的悬停提示 owner 是 `NCreature` 里的
+                    // 匿名 `Control`，节点名都是 `Hitbox`。但路径不一样（日志实测 2026-11-21）：
+                    //   怪物：.../CombatSceneContainer/EnemyContainer/Creature/Hitbox
+                    //   奥斯提：.../CombatSceneContainer/AllyContainer/@Control@2357/Hitbox   ← 中间多一层匿名节点
+                    // 所以不能要求 `/Creature/`，改成认「Hitbox + 在战斗场景容器下」。
+                    if (owner is Control hitbox
+                        && GodotObject.IsInstanceValid(hitbox)
+                        && hitbox.Name.ToString() == "Hitbox"
+                        && hitbox.GetPath().ToString().Contains("CombatSceneContainer", StringComparison.Ordinal))
+                    {
+                        LogTipHit(hitbox);
+                        return true;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // 读不到就当作没有，保证面板照常显示
+        }
+
+        return false;
+    }
+
+    // ---- 选牌界面检测（覆盖「选择悖论」这类不走 NPlayerHand 模式的界面）----
+    //
+    // 游戏所有选牌界面都实现 ICardSelectionScreen（奖励选牌 / 战斗牌堆选牌 /
+    // 选择一张牌 / 净化…），用它在场景树里找「可见的那一个」比只看
+    // NPlayerHand.CurrentMode 可靠。遍历整棵树偏贵，所以每 10 帧才查一次。
+    private static long _overlayScanFrame = -1;
+    private static bool _cardSelectVisible;
+    private static bool _inspectRelicVisible;
+    private static bool _fullScreenVisible;
+
+    /// <summary>
+    /// 每 10 帧扫一次场景树，识别两类覆盖层：
+    ///   · `NInspectRelicScreen` —— **点开某个遗物**的查看界面（面板要整个隐藏）
+    ///   · `ICardSelectionScreen` / `IOverlayScreen` —— 选牌 / 选遗物界面（面板挪到左下角）
+    /// 遍历整棵树偏贵，所以按帧节流。
+    /// </summary>
+    private static void ScanOverlaysIfDue()
+    {
+        try
+        {
+            long frame = (long)Engine.GetProcessFrames();
+
+            if (_overlayScanFrame >= 0 && frame - _overlayScanFrame < 10)
+            {
+                return;
+            }
+
+            _overlayScanFrame = frame;
+            _cardSelectVisible = false;
+            _inspectRelicVisible = false;
+            _fullScreenVisible = false;
+
+            var root = _playerBar?.GetTree()?.Root;
+
+            if (root != null)
+            {
+                ScanOverlayNode(root);
+            }
+        }
+        catch
+        {
+            // 扫描失败就当作「没有界面」，保证面板照常显示
+        }
+    }
+
+    private static void ScanOverlayNode(Node node)
+    {
+        if (node is CanvasItem item && item.IsVisibleInTree())
+        {
+            if (node is NInspectRelicScreen)
+            {
+                // 「点开某个遗物」的详情界面：面板整个让位
+                _inspectRelicVisible = true;
+                LogOverlayFound(node);
+            }
+            else if (node is NDeckViewScreen or NInspectCardScreen or NMapScreen or NSettingsScreen
+                     or NCardPileScreen or NCombatPileCardSelectScreen)
+            {
+                // 牌组查看 / 单卡查看 / 地图 / 设置 / 牌堆浏览 / 牌堆选牌：全屏界面，面板整个让位
+                _fullScreenVisible = true;
+                LogOverlayFound(node);
+            }
+            else if (node is NRunSubmenuStack submenu && submenu.SubmenusOpen)
+            {
+                // ESC 打开的运行时子菜单（暂停 / 设置 / 放弃…）：有子菜单压栈就让位
+                _fullScreenVisible = true;
+                LogOverlayFound(node);
+            }
+            else if (node is ICardSelectionScreen || node is IOverlayScreen)
+            {
+                // 选牌 / 选遗物界面：面板保留，但挪到屏幕左下角
+                _cardSelectVisible = true;
+                LogOverlayFound(node);
+            }
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            ScanOverlayNode(child);
+        }
+    }
+
+    /// <summary>
+    /// 覆盖层栈里有东西 → 打开了全屏界面（牌堆浏览、遗物查看、奖励界面…）。
+    /// 这是游戏自己的权威判据，比逐个类型猜更可靠。
+    /// </summary>
+    private static bool IsOverlayStackBusy()
+    {
+        try
+        {
+            return NOverlayStack.Instance?.ScreenCount > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsFullScreenOverlayVisible()
+    {
+        if (_fullScreenVisible)
+        {
+            return true;
+        }
+
+        try
+        {
+            var stack = NOverlayStack.Instance;
+
+            if (stack == null || stack.ScreenCount <= 0)
+            {
+                return false;
+            }
+
+            // ⚠️ 选牌界面本身也是 IOverlayScreen，但它们的处理是「挪到左下角」而不是隐藏，
+            // 所以栈顶是选牌界面时不算全屏遮挡（2026-11-21）。
+            return stack.Peek() is not ICardSelectionScreen;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string _lastOverlayDesc = string.Empty;
+
+    /// <summary>诊断：覆盖层类型变化时打一行，确认净化 / 丢弃到底被谁命中。</summary>
+    private static void LogOverlayFound(Node node)
+    {
+        string desc = node.GetType().Name;
+
+        if (desc != _lastOverlayDesc)
+        {
+            _lastOverlayDesc = desc;
+            BlockPreviewLog.Perf($"[诊断] 覆盖层: {desc} | path={node.GetPath()}");
+        }
+    }
+
+    private static bool IsCardSelectScreenVisible()
+    {
+        ScanOverlaysIfDue();
+
+        // 两种形态都算「选牌中」：
+        //   · 独立选牌界面（净化 / 选择悖论…）→ 场景树里的 ICardSelectionScreen / IOverlayScreen
+        //   · **手牌选择模式**（「选择 N 张牌来丢弃」这类）→ NPlayerHand.CurrentMode
+        // 后者没有独立的 Screen 节点，只查场景树会漏掉（2026-11-21 实测）。
+        return _cardSelectVisible || IsSelectionActive();
+    }
+
+    private static bool IsInspectRelicScreenVisible()
+    {
+        ScanOverlaysIfDue();
+        return _inspectRelicVisible;
+    }
+
     private static bool IsBarAlive()
     {
-        return _playerBar != null && GodotObject.IsInstanceValid(_playerBar);
+        return _playerBar != null
+               && GodotObject.IsInstanceValid(_playerBar)
+               // ⚠️ 地图 / 选牌 / 结算等界面里血条会被隐藏。
+               // 面板挂在血条下面，此时也不该继续画——否则会浮在全屏 UI 之上
+               //（配合 ZIndex 提高后尤其明显）。
+               && _playerBar.IsVisibleInTree();
     }
+
+    private static CanvasLayer? _screenLayer;
 
     private static void EnsureUi()
     {
+        bool wantScreen = BlockPreviewConfig.PinToScreen;
+
         if (_panel != null && GodotObject.IsInstanceValid(_panel))
         {
-            return;
+            // 「跟随血条」和「强固定」的父节点类型不同（Control 父 / CanvasLayer 父），
+            // 切换开关时需要重建面板，否则位置基准会错。
+            if (wantScreen == (_panel.GetParent() is CanvasLayer))
+            {
+                return;
+            }
+
+            DestroyUi();
         }
 
         if (!IsBarAlive())
@@ -7208,15 +7642,56 @@ public static class BlockPreviewDisplay
             IconTexture = FindBlockIcon(),
             MouseFilter = Control.MouseFilterEnum.Stop,
             Visible = false,
+
+            // 面板默认挂在玩家血条下面，和怪物（NCreature）在同一个 CanvasLayer。
+            // 怪物节点的绘制顺序比血条靠后，所以默认会被怪物盖住
+            //（第二层 Boss 沙虫会把玩家拖到怪堆里，问题最明显）。
+            // Godot 的排序是 (CanvasLayer.Layer, ZIndex, 树顺序)：
+            //   · 100 足够压过怪物（它们都是默认 0）；
+            //   · **不要用到 4096 上限**——那会连选牌 / 地图 / 结算这类全屏 UI 一起盖过去。
+            // 非战斗界面的隐藏由 `IsBarAlive()` 里的 `IsVisibleInTree()` 负责。
+            ZIndex = 100,
         };
 
         panel.OnDragMove = SyncFromPanel;
         panel.OnLock = LockAndSave;
 
-        _playerBar!.AddChild(panel);
-        panel.ApplyFonts(_playerBar.GetNodeOrNull<Label>("%BlockLabel"));
+        if (wantScreen)
+        {
+            EnsureScreenLayer().AddChild(panel);
+        }
+        else
+        {
+            _playerBar!.AddChild(panel);
+        }
+
+        panel.ApplyFonts(_playerBar!.GetNodeOrNull<Label>("%BlockLabel"));
 
         _panel = panel;
+    }
+
+    /// <summary>
+    /// 「强固定 UI」用的独立层：面板位置就是**屏幕坐标**，不随血条移动。
+    ///
+    /// Layer 取 10：高于角色 / 怪物（默认 1），但低于牌堆浏览、结算、
+    /// 玩家详情这类全屏弹窗——打开那些界面时它们会盖在面板上面，
+    /// 不会被我们的 ZIndex 顶掉（这是 ZIndex=100 挂在血条层时做不到的）。
+    /// </summary>
+    private static CanvasLayer EnsureScreenLayer()
+    {
+        if (_screenLayer != null && GodotObject.IsInstanceValid(_screenLayer))
+        {
+            return _screenLayer;
+        }
+
+        _screenLayer = new CanvasLayer
+        {
+            Name = "BlockPreviewScreenLayer",
+            Layer = 10,
+        };
+
+        _playerBar!.GetTree().Root.AddChild(_screenLayer);
+        return _screenLayer;
     }
 
     private static Vector2 GetAnchor()
@@ -7239,8 +7714,68 @@ public static class BlockPreviewDisplay
             return;
         }
 
-        // 按角色取偏移：跟随主位置时用全局值，否则用该角色自己那套
-        _panel.Position = GetAnchor() + GetEffectiveOffset();
+        // 调整模式拖动中：不要每帧把面板位置拉回配置值，
+        // 否则拖动会被"顶回去"、选牌界面里根本调不动（2026-11-21）。
+        // 拖动结束后 SyncFromPanel 会把位置写回配置，下一帧自然对齐。
+        if (_panel.IsDragging)
+        {
+            float dragScale = (float)BlockPreviewConfig.Scale;
+            _panel.Scale = new Vector2(dragScale, dragScale);
+            return;
+        }
+
+        bool pin = BlockPreviewConfig.PinToScreen;
+        bool cardSelect = !pin && IsCardSelectScreenVisible();
+
+        // 诊断：布局模式变化时打一行，确认选牌 / 选遗物界面到底有没有被识别到
+        string mode = pin ? "pin" : (cardSelect ? "cardselect" : "normal");
+
+        if (mode != _lastLayoutMode)
+        {
+            _lastLayoutMode = mode;
+            BlockPreviewLog.Perf($"[诊断] 布局模式: {mode}");
+        }
+
+        // 强固定：位置就是屏幕坐标（面板挂在独立 CanvasLayer 上，原点是屏幕左上）
+        if (pin)
+        {
+            var pos = new Vector2(
+                (float)BlockPreviewConfig.OffsetX,
+                (float)BlockPreviewConfig.OffsetY);
+
+            // 兜底：旧值是「相对血条」的偏移（默认 88 / -146），直接当屏幕坐标会跑到屏幕外。
+            // 越界时落到屏幕左下角，玩家在调整模式里拖一次就会覆盖成真实坐标。
+            var viewport = _panel.GetViewportRect().Size;
+
+            if (pos.X < 0f || pos.Y < 0f || pos.X > viewport.X - 40f || pos.Y > viewport.Y - 40f)
+            {
+                pos = new Vector2(40f, Math.Max(0f, viewport.Y - 220f));
+            }
+
+            _panel.Position = pos;
+        }
+        else if (IsCardSelectScreenVisible())
+        {
+            // 选牌 / 选遗物等二级界面：卡牌与遗物占据屏幕中央，
+            // 而血条可能被 Boss 挪到中央——所以面板不再跟随血条，
+            // 直接钉到「选牌界面位置」配置的屏幕坐标（可在调整模式里拖）。
+            var viewport = _panel.GetViewportRect().Size;
+
+            float x = Math.Clamp(
+                (float)BlockPreviewConfig.SelectScreenX,
+                0f,
+                Math.Max(0f, viewport.X - 60f));
+            float y = Math.Clamp(
+                (float)BlockPreviewConfig.SelectScreenY,
+                0f,
+                Math.Max(0f, viewport.Y - 60f));
+
+            _panel.GlobalPosition = new Vector2(x, y);
+        }
+        else
+        {
+            _panel.Position = GetAnchor() + GetEffectiveOffset();
+        }
 
         float scale = (float)BlockPreviewConfig.Scale;
         _panel.Scale = new Vector2(scale, scale);
@@ -7344,5 +7879,13 @@ public static class BlockPreviewDisplay
 
         _panel = null;
         _draggedCard = null;
+
+        // 强固定层随面板一起清掉（换战斗 / 切模式 / 关闭功能时）
+        if (_screenLayer != null && GodotObject.IsInstanceValid(_screenLayer))
+        {
+            _screenLayer.QueueFree();
+        }
+
+        _screenLayer = null;
     }
 }

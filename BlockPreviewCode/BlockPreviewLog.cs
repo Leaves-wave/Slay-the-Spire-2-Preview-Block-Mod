@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading.Tasks;
 using Godot;
 using MegaCrit.Sts2.Core.Entities.Cards;
+using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.ValueProps;
 
@@ -61,6 +62,11 @@ public static class BlockPreviewLog
     private static string _bootStamp = string.Empty;
     private static object? _lastCombat;
     private static bool _ready;
+
+    /// <summary>功能日志的批量落盘间隔。崩溃日志不受它限制。</summary>
+    private const int FlushIntervalMs = 500;
+
+    private static long _lastFlushMs;
 
     // 预览去重：每帧都会进来，先用「对象引用 + 整数」挡住重复，避免每帧拼字符串
     private static CardModel? _lastPreviewCard;
@@ -252,6 +258,34 @@ public static class BlockPreviewLog
         Write(BlockPreviewLogKind.Perf, message);
     }
 
+    /// <summary>
+    /// 记录一次**洗牌**（`CardPileCmd.Shuffle` 被调时）。
+    ///
+    /// 有什么用：
+    ///   - 对照掉帧：洗牌瞬间性能日志里的 `牌堆重算` 与 `persistent` 峰值是不是同一条时间线；
+    ///   - 对照算盘：算盘只在「必然洗牌」时给格挡，有这行就能核对判定时机。
+    /// 行数很少（每次洗牌一行），不会刷屏。
+    /// </summary>
+    public static void TrackShuffle(Player player)
+    {
+        if (!Enabled)
+        {
+            return;
+        }
+
+        try
+        {
+            int draw = PileType.Draw.GetPile(player).Cards.Count;
+            int discard = PileType.Discard.GetPile(player).Cards.Count;
+
+            Write(BlockPreviewLogKind.Tracking,
+                $"洗牌 | 抽牌堆 {draw} 张 | 弃牌堆 {discard} 张");
+        }
+        catch
+        {
+        }
+    }
+
     public static void Orb(string message)
     {
         if (!Enabled)
@@ -322,8 +356,15 @@ public static class BlockPreviewLog
 
                 writer.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] {message}");
 
-                // 每行立即落盘：崩溃/强杀时不丢
-                writer.Flush();
+                // 崩溃日志立即落盘；功能日志攒到每 500ms 落一次 ——
+                // 洗牌 / 连续拖牌时日志行会扎堆，每行一次刷盘会造成磁盘 IO 抖动。
+                // 代价：极端崩溃时最多丢最后 0.5 秒的功能日志（崩溃日志本身不受影响）。
+                if (kind == BlockPreviewLogKind.Crash
+                    || System.Environment.TickCount64 - _lastFlushMs >= FlushIntervalMs)
+                {
+                    writer.Flush();
+                    _lastFlushMs = System.Environment.TickCount64;
+                }
             }
             catch
             {
