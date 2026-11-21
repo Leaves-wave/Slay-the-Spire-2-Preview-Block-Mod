@@ -2888,14 +2888,15 @@ public static class BlockPreviewDisplay
     ///   损失     = 骨手上限 - 当前血量
     ///   有效回复 = min(回复量, 损失)      —— 溢出部分会被丢掉
     ///
-    /// 重放要逐轮推演，不能简单乘播放次数：增生除了 Heal 还带 Summon，
-    /// 而 OstyCmd.Summon 在骨手存活时只调 GainMaxHp（只涨上限、不治疗）。
-    /// 上限一涨，下一轮可治疗的空间就变大，所以每一轮的"损失"都不一样。
+    /// 关键：`OstyCmd.Summon` 在骨手存活时走 `CreatureCmd.GainMaxHp`，
+    /// 而 `GainMaxHp` = `SetMaxHp(+X)` 之后**再 `Heal(X)`** —— 上限和当前生命**同步**上涨，
+    /// 所以召唤**不改变**「上限 − 当前生命」的缺口。
+    /// （旧实现误以为只涨上限，导致治疗被高估。）
     ///
     /// 例：骨手 5/10、增生(召唤 3 / 治疗 5)、播放 2 次
-    ///   第 1 轮：上限 13、损失 8 → 治 5，当前 10
-    ///   第 2 轮：上限 16、损失 6 → 治 5，当前 15，合计 10
-    /// 只按一轮算会得到 5，明显少算。
+    ///   第 1 轮：上限 13、当前 8（召唤同步回血）→ 损失 5 → 治 5，当前 13
+    ///   第 2 轮：上限 16、当前 16 → 损失 0 → 治 0
+    ///   合计 5 —— 也就是打出前那 5 点缺口，重放不会凭空增加治疗量。
     /// </summary>
     private static int GetOstyHealBlock(CardModel card, Creature? creature, int totalPlays, out Texture2D? icon)
     {
@@ -2939,13 +2940,20 @@ public static class BlockPreviewDisplay
 
         for (int i = 0; i < totalPlays; i++)
         {
+            // ⚠️ 召唤是「上限 +X **且当前生命 +X**」：
+            //   `OstyCmd.Summon` 在骨手存活时调 `CreatureCmd.GainMaxHp`，
+            //   而 `GainMaxHp` = `SetMaxHp(+X)` 之后**再 `Heal(X)`**（`CreatureCmd.cs:889-895`）。
+            //   所以召唤**不会**扩大"上限 − 当前生命"的缺口。
+            //   漏掉下面这行会把治疗算多 —— 例：骨手 3/3 打增生（召唤3/治疗5），
+            //   实际是 6/6 满血、治疗全溢出（+0），却会被算成 +3。
             maxHp += summonPerPlay;
+            currentHp += summonPerPlay;
 
             int loss = Math.Max(0, maxHp - currentHp);
 
             if (loss <= 0)
             {
-                // 已经满血：后面几轮也治不进去（上限还会涨，但涨的部分同样填满就停）
+                // 已经满血：后面几轮召唤也同步填满，治疗依然溢不进去
                 break;
             }
 
