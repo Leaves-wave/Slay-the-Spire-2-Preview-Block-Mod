@@ -695,6 +695,44 @@ public static class BlockPreviewDisplay
     private static long _perfPersistentMaxUs;
     private static long _perfLastFlushTicks;
 
+    // ---- 洗牌诊断（2026-11-21）----
+    // 目的：把"洗牌那一瞬间 mod 到底花了多少时间"单独抓出来。
+    // 洗牌会连发很多次 ContentsChanged，同时 persistent 每帧都在跑，
+    // 只看 2 秒聚合的 Perf 行会把峰值平均掉。
+    private static long _lastShuffleMs;
+    private static int _pileEventsSinceShuffle;
+    private static long _postShuffleMaxPersistentUs;
+    private static long _postShuffleMaxRefreshUs;
+    private static int _lastGen0, _lastGen1, _lastGen2;
+
+    /// <summary>由 `BlockPreviewLog.TrackShuffle` 调用：记录一次洗牌并汇报上一次洗牌后的统计。</summary>
+    public static void NoteShuffle()
+    {
+        long now = System.Environment.TickCount64;
+
+        int gen0 = GC.CollectionCount(0);
+        int gen1 = GC.CollectionCount(1);
+        int gen2 = GC.CollectionCount(2);
+
+        if (_lastShuffleMs > 0)
+        {
+            BlockPreviewLog.Perf(
+                $"[洗牌] 距上次 {now - _lastShuffleMs}ms"
+                + $" | 期间牌堆事件 {_pileEventsSinceShuffle} 次"
+                + $" | 洗牌后峰值 persistent {_postShuffleMaxPersistentUs / 1000.0:F2}ms"
+                + $" / refresh {_postShuffleMaxRefreshUs / 1000.0:F2}ms"
+                + $" | GC {gen0 - _lastGen0}/{gen1 - _lastGen1}/{gen2 - _lastGen2}");
+        }
+
+        _lastShuffleMs = now;
+        _pileEventsSinceShuffle = 0;
+        _postShuffleMaxPersistentUs = 0;
+        _postShuffleMaxRefreshUs = 0;
+        _lastGen0 = gen0;
+        _lastGen1 = gen1;
+        _lastGen2 = gen2;
+    }
+
     private static long PerfToUs(long elapsedTicks)
     {
         return elapsedTicks * 1_000_000L / Stopwatch.Frequency;
@@ -713,6 +751,14 @@ public static class BlockPreviewDisplay
         if (us > _perfRefreshMaxUs)
         {
             _perfRefreshMaxUs = us;
+        }
+
+        // 洗牌后 300ms 内的峰值单独记（洗牌是牌堆剧变点，2 秒聚合会把它平均掉）
+        if (_lastShuffleMs > 0
+            && System.Environment.TickCount64 - _lastShuffleMs < 300
+            && us > _postShuffleMaxRefreshUs)
+        {
+            _postShuffleMaxRefreshUs = us;
         }
 
         // 慢刷新明细：单次 refresh 超过 2ms 时单独记一行。
@@ -788,6 +834,14 @@ public static class BlockPreviewDisplay
         if (us > _perfPersistentMaxUs)
         {
             _perfPersistentMaxUs = us;
+        }
+
+        // 洗牌后 300ms 内的峰值单独记
+        if (_lastShuffleMs > 0
+            && System.Environment.TickCount64 - _lastShuffleMs < 300
+            && us > _postShuffleMaxPersistentUs)
+        {
+            _postShuffleMaxPersistentUs = us;
         }
     }
 
@@ -1206,6 +1260,11 @@ public static class BlockPreviewDisplay
     private static void OnAnyPileChanged()
     {
         _pileStatsDirty = true;
+
+        if (PerfLogEnabled)
+        {
+            _pileEventsSinceShuffle++;
+        }
     }
 
     private static void WatchPile(CardPile pile)

@@ -280,6 +280,10 @@ public static class BlockPreviewLog
 
             Write(BlockPreviewLogKind.Tracking,
                 $"洗牌 | 抽牌堆 {draw} 张 | 弃牌堆 {discard} 张");
+
+            // 让显示层统计「洗牌后 300ms 内的耗时峰值 / 牌堆事件次数」，
+            // 下次洗牌时汇总写进 Perf 日志（2026-11-21 洗牌卡顿排查）
+            BlockPreviewDisplay.NoteShuffle();
         }
         catch
         {
