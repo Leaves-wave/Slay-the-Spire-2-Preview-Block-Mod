@@ -13,6 +13,21 @@ public class BlockPreviewConfig : SimpleModConfig
     public static bool Enabled { get; set; } = true;
 
     /// <summary>
+    /// 游戏版本是否低于算法校准版本（v0.113.x）。
+    /// 只用来控制下面那条提示的显隐，本身不是配置项（`[ConfigIgnore]`）。
+    /// </summary>
+    [ConfigIgnore]
+    public static bool IsOldGameVersion => GameVersionInfo.IsBelowCalibrated;
+
+    /// <summary>
+    /// 版本提示：只在游戏版本低于测试版时出现。
+    /// 标题本身就是警告文案（值是占位，勾不勾都不影响功能）——BaseLib 没有纯文本行，
+    /// 这是能在设置界面显示长提示的最省事的做法。
+    /// </summary>
+    [ConfigVisibleIf(nameof(IsOldGameVersion), true)]
+    public static bool VersionNotice { get; set; } = true;
+
+    /// <summary>
     /// 常驻显示：战斗中一直显示当前格挡（拖牌时切换成预览值）。
     /// </summary>
     public static bool AlwaysVisible { get; set; } = true;

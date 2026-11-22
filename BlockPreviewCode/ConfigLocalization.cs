@@ -31,6 +31,7 @@ internal static class ConfigLocalization
 
         // 常规设置
         ("Enabled", "Enable preview", "启用预览"),
+        ("VersionNotice", "⚠ Game version is not the latest (beta). Values are calibrated on beta and may be inaccurate.", "⚠ 游戏版本不是最新（测试版），算法以测试版为准，可能计算错误"),
         ("AlwaysVisible", "Always visible", "常驻显示"),
         ("AdjustMode", "Adjust position", "调整模式"),
         ("OffsetX", "Horizontal offset", "水平偏移"),
@@ -138,6 +139,7 @@ internal static class ConfigLocalization
         ("RelicToggles", "遺物開關", "遺物切替", "유물 토글"),
 
         ("Enabled", "啟用預覽", "プレビューを有効化", "미리보기 사용"),
+        ("VersionNotice", "⚠ 遊戲版本不是最新（測試版），算法以測試版為準，可能計算錯誤", "⚠ ゲームが最新版（ベータ）ではありません。計算が誤る可能性があります", "⚠ 게임 버전이 최신(베타)이 아닙니다. 계산이 틀릴 수 있습니다"),
         ("AlwaysVisible", "常駐顯示", "常に表示", "항상 표시"),
         ("AdjustMode", "調整模式", "位置調整", "위치 조정"),
         ("OffsetX", "水平偏移", "水平オフセット", "가로 오프셋"),

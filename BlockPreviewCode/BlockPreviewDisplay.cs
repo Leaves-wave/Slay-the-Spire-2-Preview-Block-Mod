@@ -11,7 +11,9 @@ using MegaCrit.Sts2.Core.Combat.History.Entries;
 using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Creatures;
+#if STS2_FOOL
 using MegaCrit.Sts2.Core.Entities.FoolArrows;
+#endif
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Hooks;
 using MegaCrit.Sts2.Core.Localization.DynamicVars;
@@ -25,6 +27,7 @@ using MegaCrit.Sts2.Core.Models.Relics;
 using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.HoverTips;
+using MegaCrit.Sts2.Core.Nodes.Orbs;
 using MegaCrit.Sts2.Core.Nodes.Relics;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens;
@@ -478,12 +481,20 @@ public static class BlockPreviewDisplay
     /// </summary>
     private static int GetDiscardCount(CardModel card)
     {
+#if STS2_FOOL
         if (card is CalculatedGamble or WheelOfFortune or ShadowStep or StormOfSteel)
+#else
+        if (card is CalculatedGamble or ShadowStep or StormOfSteel)
+#endif
         {
             return -1;
         }
 
+#if STS2_FOOL
         if (card is Acrobatics or DaggerThrow or Prepared or Survivor or TheHermit)
+#else
+        if (card is Acrobatics or DaggerThrow or Prepared or Survivor)
+#endif
         {
             return 1;
         }
@@ -2793,7 +2804,11 @@ public static class BlockPreviewDisplay
 
         // 1) 补满手牌：填满之后，后面几轮打出去又腾出 1 格、再补 1 张，
         //    所以第一轮就把 capacity 用光，总量直接取 capacity
+#if STS2_FOOL
         if (card is CrashLanding || card is TheLovers)
+#else
+        if (card is CrashLanding)
+#endif
         {
             return capacity;
         }
@@ -2844,11 +2859,13 @@ public static class BlockPreviewDisplay
             return new GeneratedCardsSpec(ReadCardsVar(card), cardsToHand);
         }
 
+#if STS2_FOOL
         // 显化 BrightenUp：两个具名变量相加（悲伤 Sadness + 喜悦 Joy）
         if (card is BrightenUp)
         {
             return new GeneratedCardsSpec(ReadDynamicVar(card, "Sadness") + ReadDynamicVar(card, "Joy"), true);
         }
+#endif
 
         // 遗物锤 HeirloomHammer：张数读 Repeat 变量
         if (card is HeirloomHammer)
@@ -2856,6 +2873,7 @@ public static class BlockPreviewDisplay
             return new GeneratedCardsSpec(ReadDynamicVar(card, "Repeat"), true);
         }
 
+#if STS2_FOOL
         // 苦痛自贬 SelfDeprecate：自己 1 张悲伤 + 每位"其他"队友 Joy 张
         // GetTeammatesOf 包含自己，所以额外队友数 = 队友数 - 1，单人时为 0
         if (card is SelfDeprecate)
@@ -2864,6 +2882,7 @@ public static class BlockPreviewDisplay
             int extra = otherTeammates * ReadDynamicVar(card, "Joy");
             return new GeneratedCardsSpec(ReadDynamicVar(card, "Sadness") + extra, true);
         }
+#endif
 
         // 瞥见彼岸 GlimpseBeyond：每位队友各生成 Cards 张灵魂，放进抽牌堆
         if (card is GlimpseBeyond)
@@ -4121,9 +4140,11 @@ public static class BlockPreviewDisplay
 
         try
         {
+#if STS2_FOOL
             result.Wah = MelodyCmd.PlayedWahThisTurn(player);
             result.Cho = MelodyCmd.PlayedChoThisTurn(player);
             result.Ki = MelodyCmd.PlayedKiThisTurn(player);
+#endif
             result.Count = (result.Wah ? 1 : 0) + (result.Cho ? 1 : 0) + (result.Ki ? 1 : 0);
         }
         catch (Exception e)
@@ -4159,6 +4180,7 @@ public static class BlockPreviewDisplay
     /// </summary>
     private static int GetTwineBlock(CardModel card, Player? player, int totalPlays, out Texture2D? icon)
     {
+#if STS2_FOOL
         icon = null;
 
         if (player == null || card.Type != CardType.Attack)
@@ -4300,6 +4322,10 @@ public static class BlockPreviewDisplay
             GD.Print($"[{MainFile.ModId}] 合股线读取箭矢失败: {e.Message}");
             return 0;
         }
+#else
+        icon = null;
+        return 0;
+#endif
     }
 
     /// <summary>
@@ -4311,6 +4337,7 @@ public static class BlockPreviewDisplay
     /// </summary>
     private static int GetSongPathBlock(CardModel card, Creature? creature, out Texture2D? icon)
     {
+#if STS2_FOOL
         icon = null;
 
         if (creature == null)
@@ -4347,6 +4374,10 @@ public static class BlockPreviewDisplay
 
         icon = GetSongPathIcon();
         return amount;
+#else
+        icon = null;
+        return 0;
+#endif
     }
 
     /// <summary>
@@ -4362,6 +4393,7 @@ public static class BlockPreviewDisplay
     /// </summary>
     private static int GetLullabyBlock(CardModel card, Creature? creature, out Texture2D? icon)
     {
+#if STS2_FOOL
         icon = null;
 
         if (creature == null)
@@ -4403,6 +4435,10 @@ public static class BlockPreviewDisplay
 
         icon = GetLullabyIcon();
         return amount;
+#else
+        icon = null;
+        return 0;
+#endif
     }
 
     /// <summary>
@@ -4422,6 +4458,7 @@ public static class BlockPreviewDisplay
     /// </summary>
     private static int GetAllIsWellBlock(CardModel card, Creature? creature, int totalPlays, out Texture2D? icon)
     {
+#if STS2_FOOL
         icon = null;
 
         if (creature == null)
@@ -4445,11 +4482,16 @@ public static class BlockPreviewDisplay
 
         icon = GetAllIsWellIcon();
         return amount * perPlay * Math.Max(1, totalPlays);
+#else
+        icon = null;
+        return 0;
+#endif
     }
 
     /// <summary>这张牌**每次播放**会生成几张「悲伤」。只认真正走生成接口的那几张牌。</summary>
     private static int GetSadnessCardsGenerated(CardModel card)
     {
+#if STS2_FOOL
         return card switch
         {
             BrightenUp => Math.Max(0, ReadDynamicVar(card, "Sadness")),
@@ -4460,10 +4502,14 @@ public static class BlockPreviewDisplay
             Vitriol => 1,
             _ => 0,
         };
+#else
+        return 0;
+#endif
     }
 
     private static Texture2D? GetAllIsWellIcon()
     {
+#if STS2_FOOL
         if (_allIsWellIconResolved)
         {
             return _allIsWellIcon;
@@ -4482,6 +4528,9 @@ public static class BlockPreviewDisplay
         }
 
         return _allIsWellIcon;
+#else
+        return null;
+#endif
     }
 
     /// <summary>
@@ -4578,13 +4627,16 @@ public static class BlockPreviewDisplay
         {
             var vars = card.DynamicVars;
 
+#if STS2_FOOL
             if (vars != null
                 && vars.TryGetValue(HitCountVar.defaultName, out var hv)
                 && hv is HitCountVar hitCount)
             {
                 hits = Math.Max(1, (int)Math.Floor(hitCount.PreviewValue));
             }
-            else if (vars != null
+            else
+#endif
+            if (vars != null
                 && vars.TryGetValue("CalculatedHits", out var chv)
                 && chv is CalculatedVar calculatedHits)
             {
@@ -4639,6 +4691,7 @@ public static class BlockPreviewDisplay
 
     private static Texture2D? GetSongPathIcon()
     {
+#if STS2_FOOL
         if (_songPathIconResolved)
         {
             return _songPathIcon;
@@ -4657,10 +4710,14 @@ public static class BlockPreviewDisplay
         }
 
         return _songPathIcon;
+#else
+        return null;
+#endif
     }
 
     private static Texture2D? GetLullabyIcon()
     {
+#if STS2_FOOL
         if (_lullabyIconResolved)
         {
             return _lullabyIcon;
@@ -4679,6 +4736,9 @@ public static class BlockPreviewDisplay
         }
 
         return _lullabyIcon;
+#else
+        return null;
+#endif
     }
 
     /// <summary>
@@ -5696,6 +5756,7 @@ public static class BlockPreviewDisplay
         //     它们已经计入 `etherealCount`，这里要减掉避免重复
         //   - 多段播放时第一次就烧光了，后面的播放没有 Shoot 牌可烧，
         //     所以 Shoot 张数只算一次（自身 Exhaust 仍按播放次数算）
+#if STS2_FOOL
         if (card is Florescence)
         {
             int plays = GetPlayCount(card, creature);
@@ -5712,6 +5773,7 @@ public static class BlockPreviewDisplay
             icon = power.Icon;
             return total * power.Amount;
         }
+#endif
 
         int count = etherealCount;
 
@@ -5751,6 +5813,7 @@ public static class BlockPreviewDisplay
     /// </summary>
     private static int CountShootCardsOutsideExhaust(Player player)
     {
+#if STS2_FOOL
         try
         {
             var state = player.PlayerCombatState;
@@ -5777,6 +5840,9 @@ public static class BlockPreviewDisplay
             GD.Print($"[{MainFile.ModId}] 统计射击牌失败: {e.Message}");
             return 0;
         }
+#else
+        return 0;
+#endif
     }
 
     /// <summary>
@@ -5786,6 +5852,7 @@ public static class BlockPreviewDisplay
     /// </summary>
     private static int CountEtherealShootInHand(CardModel? card, Player player)
     {
+#if STS2_FOOL
         try
         {
             int count = 0;
@@ -5811,6 +5878,9 @@ public static class BlockPreviewDisplay
             GD.Print($"[{MainFile.ModId}] 统计虚无射击牌失败: {e.Message}");
             return 0;
         }
+#else
+        return 0;
+#endif
     }
 
     /// <summary>
@@ -5871,7 +5941,11 @@ public static class BlockPreviewDisplay
         // 怒放（Florescence）也归这一类：它在 OnPlay 里立刻烧光所有射击牌。
         // （严格说它算的 `etherealCount` 里还有非射击的虚无牌属于回合结束，
         //  这里按"全部立即"处理偏保守 —— 只有非射击虚无牌很多时才会影响奥里哈刚判断。）
+#if STS2_FOOL
         if (card is Stoke or SecondWind or FiendFire or Havoc or Thrash or Purity or Florescence)
+#else
+        if (card is Stoke or SecondWind or FiendFire or Havoc or Thrash or Purity)
+#endif
         {
             return feelNoPainBlock;
         }
@@ -6683,9 +6757,11 @@ public static class BlockPreviewDisplay
             // （闪电 / 冰霜 / 黑暗 / 等离子 / 玻璃），等概率。
             // 类型算不出来，但"占几个槽"是确定的 → 按 Random 入队，
             // 这样它挤压队首冰球（溢出激发）的收益能算对。
+#if STS2_FOOL
             case TheMagician:
                 list.Add(new(SimOrbKind.Random, ReadDynamicVar(card, "Repeat")));
                 break;
+#endif
 
             // 不生成球 / 确认无格挡影响：
             //   Ignition → TargetType.AnyAlly，给**队友**生成 1 颗等离子球，
@@ -6703,7 +6779,9 @@ public static class BlockPreviewDisplay
         {
             Capacitor => ReadDynamicVar(card, "Repeat"),
             Modded => 1,
+#if STS2_FOOL
             TheMagician => ReadDynamicVar(card, "Repeat"),
+#endif
             _ => 0,
         };
     }
@@ -6755,6 +6833,19 @@ public static class BlockPreviewDisplay
 
         var specs = GetOrbChannelSpecs(card);
         int slotAdd = GetOrbSlotAdd(card);
+
+        // 雷暴（StormPower）：每打出一张**能力牌**，按层数各生成 1 个闪电球
+        // （`StormPower.AfterCardPlayed` → `OrbCmd.Channel<LightningOrb>` × Amount）。
+        // 拖能力牌时必须算进来，否则"满槽把队首冰球挤出去"的溢出激发会漏算（2026-11-22）。
+        if (card != null && card.Type == CardType.Power && creature != null)
+        {
+            var storm = creature.GetPower<StormPower>();
+
+            if (storm != null && storm.Amount > 0)
+            {
+                specs.Add(new OrbChannelSpec(SimOrbKind.Lightning, Math.Max(0, storm.Amount)));
+            }
+        }
 
         // 队列空 + 不生成球 + 不扩容 → 无事可做
         if (queue.Orbs.Count == 0 && specs.Count == 0 && slotAdd == 0)
@@ -7304,6 +7395,7 @@ public static class BlockPreviewDisplay
         //   ChoFirm  —— 手上有可用箭时 `blockGains = 1 + 1 = 2` 次（6 → 12，升 8 → 16）
         //   ChoLimbs —— 固定 GainBlock ×2（5 → 10，升 7 → 14）；
         //               旋律只影响它的**费用**，不影响格挡，所以无条件 ×2
+#if STS2_FOOL
         if (card is ChoFirm)
         {
             if (HasAvailableArrow(card.Owner))
@@ -7323,6 +7415,7 @@ public static class BlockPreviewDisplay
         {
             gain += SumAutoPlayedMelodyBlock(card);
         }
+#endif
 
         return (int)Math.Floor(gain);
     }
@@ -7330,6 +7423,7 @@ public static class BlockPreviewDisplay
     /// <summary>玩家当前是否还有可用的箭（`ArrowSlot.IsAvailable`）。</summary>
     private static bool HasAvailableArrow(Player? player)
     {
+#if STS2_FOOL
         if (player == null)
         {
             return false;
@@ -7347,6 +7441,9 @@ public static class BlockPreviewDisplay
             GD.Print($"[{MainFile.ModId}] 读取箭矢失败: {e.Message}");
             return false;
         }
+#else
+        return false;
+#endif
     }
 
     /// <summary>
@@ -7359,6 +7456,7 @@ public static class BlockPreviewDisplay
     /// </summary>
     private static int SumAutoPlayedMelodyBlock(CardModel chorus)
     {
+#if STS2_FOOL
         var player = chorus.Owner;
 
         if (player == null)
@@ -7413,6 +7511,9 @@ public static class BlockPreviewDisplay
             GD.Print($"[{MainFile.ModId}] 统计副歌连锁失败: {e.Message}");
             return 0;
         }
+#else
+        return 0;
+#endif
     }
 
     /// <summary>
@@ -7426,6 +7527,7 @@ public static class BlockPreviewDisplay
         typeof(NHoverTipSet).GetField("_activeHoverTips", BindingFlags.NonPublic | BindingFlags.Static);
 
     private static string _lastTipOwnerDesc = string.Empty;
+    private static string _lastOrbOwnerDesc = string.Empty;
     private static string _lastLayoutMode = string.Empty;
 
     private static string _lastTipHitDesc = string.Empty;
@@ -7456,16 +7558,31 @@ public static class BlockPreviewDisplay
             {
                 foreach (var owner in tips.Keys)
                 {
-                    // 诊断：把悬停提示的 owner 打到 godot.log（只在新类型时打一行）。
+                    // 诊断：把悬停提示的 owner 打到 mod 日志（只在新类型时打一行）。
                     // `Control` 这种匿名实例光看类型分不出来，所以把节点路径一起打出来。
                     if (owner is Node tipNode)
                     {
-                        string desc = $"{tipNode.GetType().Name} ({tipNode.Name})";
+                        string desc = $"{tipNode.GetType().FullName} ({tipNode.Name})";
 
                         if (desc != _lastTipOwnerDesc)
                         {
                             _lastTipOwnerDesc = desc;
                             BlockPreviewLog.Perf($"[诊断] 悬停提示 owner: {desc} | path={tipNode.GetPath()}");
+                        }
+
+                        // 充能球专用：路径里带 Orb 就单独记一次（不管类型是否见过），
+                        // 用来抓「悬停球被遮挡」时到底是谁在当 owner（2026-11-22）。
+                        string tipPath = tipNode.GetPath().ToString();
+
+                        if (tipPath.Contains("Orb", StringComparison.Ordinal))
+                        {
+                            string orbDesc = $"{tipNode.GetType().FullName} ({tipNode.Name})";
+
+                            if (orbDesc != _lastOrbOwnerDesc)
+                            {
+                                _lastOrbOwnerDesc = orbDesc;
+                                BlockPreviewLog.Perf($"[诊断] 球悬停 owner: {orbDesc} | path={tipPath}");
+                            }
                         }
                     }
 
@@ -7475,11 +7592,12 @@ public static class BlockPreviewDisplay
                     // 卡牌 / 能量 / 牌堆按钮 / 结束回合这些小提示**不抢位置**，
                     // 否则鼠标扫过任何东西面板都会闪没（2026-11-21 踩过）。
                     if (owner is NInspectRelicScreen or NRelicInventoryHolder or NRelic
-                        or NPowerContainer or NCreature or NPower
+                        or NPowerContainer or NCreature or NPower or NOrb
                         && owner is Control control
                         && GodotObject.IsInstanceValid(control)
                         && control.IsVisibleInTree())
                     {
+                        LogTipHit(control);
                         return true;
                     }
 
@@ -7494,6 +7612,18 @@ public static class BlockPreviewDisplay
                         && hitbox.GetPath().ToString().Contains("CombatSceneContainer", StringComparison.Ordinal))
                     {
                         LogTipHit(hitbox);
+                        return true;
+                    }
+
+                    // 充能球：悬停提示 owner 是球节点里的匿名 `Control`，名字 `Bounds`，
+                    // 路径形如 .../Creature/OrbManager/Orbs/@Control@1400/Bounds（2026-11-22 实测）。
+                    // 注意不是 `NOrb` 本身，所以只判断 NOrb 抓不到。
+                    if (owner is Control orbBounds
+                        && GodotObject.IsInstanceValid(orbBounds)
+                        && orbBounds.Name.ToString() == "Bounds"
+                        && orbBounds.GetPath().ToString().Contains("/Orbs/", StringComparison.Ordinal))
+                    {
+                        LogTipHit(orbBounds);
                         return true;
                     }
                 }
@@ -7575,7 +7705,7 @@ public static class BlockPreviewDisplay
                 _fullScreenVisible = true;
                 LogOverlayFound(node);
             }
-            else if (node is ICardSelectionScreen || node is IOverlayScreen)
+            else if (node is IOverlayScreen || HasCardSelectionInterface(node))
             {
                 // 选牌 / 选遗物界面：面板保留，但挪到屏幕左下角
                 _cardSelectVisible = true;
@@ -7623,7 +7753,9 @@ public static class BlockPreviewDisplay
 
             // ⚠️ 选牌界面本身也是 IOverlayScreen，但它们的处理是「挪到左下角」而不是隐藏，
             // 所以栈顶是选牌界面时不算全屏遮挡（2026-11-21）。
-            return stack.Peek() is not ICardSelectionScreen;
+            // ⚠️ 不能用 `is not ICardSelectionScreen`：正式版（0.111.x）没有这个接口，
+            // 硬引用会编译失败。改为按接口名反射判断（2026-11-22）。
+            return !HasCardSelectionInterface(stack.Peek() as Node);
         }
         catch
         {
@@ -7643,6 +7775,41 @@ public static class BlockPreviewDisplay
             _lastOverlayDesc = desc;
             BlockPreviewLog.Perf($"[诊断] 覆盖层: {desc} | path={node.GetPath()}");
         }
+    }
+
+    private static bool HasCardSelectionInterface(Node? node)
+    {
+        return HasCardSelectionInterface((object?)node);
+    }
+
+    /// <summary>
+    /// 对象是否实现了 `ICardSelectionScreen`。
+    ///
+    /// 用反射按**接口名**判断，而不是 `is ICardSelectionScreen`：
+    /// 正式版（v0.111.x）没有这个接口，硬引用会导致编译失败（2026-11-22）。
+    /// </summary>
+    private static bool HasCardSelectionInterface(object? obj)
+    {
+        if (obj == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            foreach (var itf in obj.GetType().GetInterfaces())
+            {
+                if (itf.Name == "ICardSelectionScreen")
+                {
+                    return true;
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return false;
     }
 
     private static bool IsCardSelectScreenVisible()

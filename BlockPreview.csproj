@@ -1,4 +1,4 @@
-﻿<Project Sdk="Godot.NET.Sdk/4.5.1" InitialTargets="CheckDependencyPaths">
+<Project Sdk="Godot.NET.Sdk/4.5.1" InitialTargets="CheckDependencyPaths">
     <Import Project=".\Sts2PathDiscovery.props"/>
     <PropertyGroup>
         <TargetFramework>net9.0</TargetFramework>
@@ -16,6 +16,26 @@
         <!-- Diasble architecture mismatch warning; mods are ideally built for all platforms (MSIL)
              while your local StS2 version will be for your specific platform. -->
         <NoWarn>$(NoWarn);MSB3270</NoWarn> 
+    </PropertyGroup>
+
+    <!-- ============================================================
+         「愚者」支持开关（2026-11-22）
+
+         正式版（v0.111.x）没有愚者角色，相关类型（FoolArrows / SicEm 之外的
+         ChoFirm / Florescence / TheMagician / CardTag.Shoot…）都不存在。
+         所以愚者相关代码全部包在 `#if STS2_FOOL` 里，默认**不编译**。
+
+         测试版（v0.113.x）构建时加参数：
+             dotnet build -p:FoolSupport=true
+         然后在正式版里这段代码会被编译进去。
+         ============================================================ -->
+    <PropertyGroup>
+        <FoolSupport Condition="'$(FoolSupport)' == ''">false</FoolSupport>
+        <DefineConstants Condition="'$(FoolSupport)' == 'true'">$(DefineConstants);STS2_FOOL</DefineConstants>
+
+        <!-- 正式版构建时愚者代码被 #if 掉，对应字段会变成"从未使用"。
+             这些警告在默认（无愚者）构建下没有意义，直接屏蔽。 -->
+        <NoWarn Condition="'$(FoolSupport)' != 'true'">$(NoWarn);CS0169;CS0414;CS0649</NoWarn>
     </PropertyGroup>
 
     <ItemGroup Condition="Exists('$(Sts2DataDir)')" >
