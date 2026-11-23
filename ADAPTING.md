@@ -375,4 +375,4 @@ if (Config.ShowTheirRelic)
 
 ## 11. 许可
 
-MIT。拿走、改写、商用都可以，保留版权声明即可。改完之后欢迎回一个 issue 告诉我你接了哪些 mod。
+MIT，保留版权声明即可。改完之后欢迎回一个 issue 告诉我你接了哪些 mod。

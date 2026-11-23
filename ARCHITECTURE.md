@@ -518,6 +518,6 @@ dotnet build -c Release
 
 ## 11. 许可
 
-MIT，见 [LICENSE](LICENSE)。拿去改、拿去发布都可以，保留版权声明即可。
+MIT，见 [LICENSE](LICENSE)。保留版权声明即可。
 
 依赖的 [BaseLib](https://github.com/Alchyr/BaseLib-STS2) 为 MIT；RitsuLib 遵循其原许可。

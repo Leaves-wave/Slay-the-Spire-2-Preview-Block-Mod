@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
 using Godot;
+using MegaCrit.Sts2.Core.Assets;
 using MegaCrit.Sts2.Core.CardSelection;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Combat.History;
@@ -15,6 +16,7 @@ using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Entities.FoolArrows;
 #endif
 using MegaCrit.Sts2.Core.Entities.Players;
+using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Hooks;
 using MegaCrit.Sts2.Core.Localization.DynamicVars;
 using MegaCrit.Sts2.Core.Models;
@@ -1747,6 +1749,19 @@ public static class BlockPreviewDisplay
         }
 
         _panel.SetValues(values);
+
+        // 临时诊断：确认最终传给面板的值（用来区分"没算出来"和"算了但没显示"）
+        if (values.FrostBlock > 0 || values.TotalBlock > 0)
+        {
+            string panelDbg = $"面板值: frost={values.FrostBlock} evoke={values.EvokeBlock}"
+                              + $" overflow={values.OverflowBlock} total={values.TotalBlock}";
+
+            if (panelDbg != _lastPanelDbg)
+            {
+                _lastPanelDbg = panelDbg;
+                BlockPreviewLog.Perf($"[诊断] {panelDbg}");
+            }
+        }
         ApplyLayout();
 
         if (!_panel.Visible)
@@ -2250,9 +2265,42 @@ public static class BlockPreviewDisplay
 
         // 球被激发就会消耗，所以"剩余冰球被动"和"激发格挡"必须按总播放次数逐次推演。
         // 统一推演同时覆盖：生成新球（Channel）、被挤出的溢出激发、玩家主动激发。
-        SimulateOrbs(creature, card, totalPlays,
-            out int evokeBlock, out int overflowBlock, out int frostBlock, out int goldCablesBlock,
-            out var evokeIcon, out var overflowIcon, out var frostIcon, out var goldCablesIcon);
+        //
+        // 单独 try/catch 是为了让异常能出现在日志里：以前它抛出去被上层吞掉，
+        // 表现就是"面板直接 =0"，完全看不出原因（2026-11-23）。
+        int evokeBlock = 0;
+        int overflowBlock = 0;
+        int frostBlock = 0;
+        int goldCablesBlock = 0;
+        Texture2D? evokeIcon = null;
+        Texture2D? overflowIcon = null;
+        Texture2D? frostIcon = null;
+        Texture2D? goldCablesIcon = null;
+
+        try
+        {
+            SimulateOrbs(creature, card, totalPlays,
+                out evokeBlock, out overflowBlock, out frostBlock, out goldCablesBlock,
+                out evokeIcon, out overflowIcon, out frostIcon, out goldCablesIcon);
+        }
+        catch (Exception e)
+        {
+            BlockPreviewLog.Perf($"[诊断] SimulateOrbs 异常: {e}");
+        }
+
+        // 临时诊断：把球推演结果直接打到 godot.log（不受"开启 mod 日志"影响），
+        // 用来确认「拖生成冰球的牌时 frostBlock 到底算出来没有」（2026-11-23）。
+        if (frostBlock > 0 || evokeBlock > 0 || overflowBlock > 0)
+        {
+            string orbDbg = $"球推演: frost={frostBlock} evoke={evokeBlock} overflow={overflowBlock}"
+                            + $" plays={totalPlays} card={card?.GetType().Name ?? "null"}";
+
+            if (orbDbg != _lastOrbDbg)
+            {
+                _lastOrbDbg = orbDbg;
+                BlockPreviewLog.Perf($"[诊断] {orbDbg}");
+            }
+        }
 
         // 融入暗影（ShadowmeldPower）：本回合获得的格挡翻倍。
         // 卡面 BlockVar / CalculatedBlockVar 的 PreviewValue 已经过 Hook.ModifyBlock，
@@ -2448,6 +2496,9 @@ public static class BlockPreviewDisplay
                           || deathDoorBlock > 0 || doomCloakBlock > 0
                           || invincibleBlock > 0
                           || cardPlatingBlock > 0
+                          // ⚠️ 冰球被动必须算进来：只产冰球的牌（长枪 / 寒流 / 冰霜新星…）
+                          // 没有手牌格挡，漏掉这条会被判成"无收益"，面板直接不显示（2026-11-23）。
+                          || frostBlock > 0
                           || evokeBlock > 0 || overflowBlock > 0 || danseBlock > 0 || rageBlock > 0
                           || afterimageBlock > 0 || fiendFireBlock > 0
                           || spiritOfAshBlock > 0 || fastenBlock > 0
@@ -6977,12 +7028,22 @@ public static class BlockPreviewDisplay
                 var last = orbs[orbs.Count - 1];
                 orbs.RemoveAt(orbs.Count - 1);
 
+                // ⚠️ 被动必须先算：冰球的被动在 `BeforeTurnEndOrbTrigger` 触发，
+                // **早于**吞噬暗影的 `AfterSideTurnEnd` 激发。
+                // 这颗球虽然随后被激发消耗，它的被动仍然生效过 —— 漏掉会少算一层（2026-11-23 修正）。
+                if (last.IsFrost && last.PassiveVal > 0)
+                {
+                    frostBlock += last.PassiveVal;
+                    frostIcon ??= last.Icon;
+                }
+
                 if (last.IsFrost && last.EvokeVal > 0)
                 {
-                    // 实测：它**会**触发融入暗影 —— `ShadowmeldPower` 要到 PhaseTwo 的
-                    // `AfterSideTurnEnd` 才移除，晚于这里的激发，所以和其它激发一起乘倍率。
                     evokeBlock += last.EvokeVal;
-                    evokeIcon ??= GetEvokeIcon();
+
+                    // 吞噬暗影的激发用它**自己的状态图标**；引雷针留给"主动激发"。
+                    // 两者同时存在时保持引雷针（`??=` 不覆盖），因为主动激发更直观。
+                    evokeIcon ??= GetConsumingShadowIcon() ?? GetEvokeIcon();
                 }
             }
         }
@@ -7044,11 +7105,13 @@ public static class BlockPreviewDisplay
     {
         if (orb is FrostOrb frost)
         {
+            // 冰球图标：正式版（v0.111.x）里 `orbs/frost.png` 有时取不到 → 面板会显示成问号。
+            // 取不到就退回格挡图标，保证至少不是"丢失图标"（2026-11-23）。
             return new SimOrb(
                 SimOrbKind.Frost,
                 Math.Max(0, (int)Math.Floor(frost.EvokeVal)),
                 Math.Max(0, (int)Math.Floor(frost.PassiveVal)),
-                frost.Icon);
+                frost.Icon ?? TryLoadFrostOrbIconDirect() ?? FindBlockIcon());
         }
 
         var kind = orb switch
@@ -7089,9 +7152,97 @@ public static class BlockPreviewDisplay
         return new SimOrb(SimOrbKind.Frost, evoke, passive, GetFrostOrbIcon(creature));
     }
 
+    private static Texture2D? _frostOrbIconCache;
+    private static bool _frostOrbIconLoaded;
+
     /// <summary>
-    /// 取冰球图标：优先用场上**真实冰球**的 Icon。
-    /// Canonical 模板的 Icon 同样可能触发模型校验异常，所以整体用 try/catch 兜底。
+    /// 兜底：按资源路径直接加载冰球图标（场上还没生成过冰球时用）。
+    ///
+    /// ⚠️ **必须先 `FileAccess.FileExists` 确认存在再加载**：
+    /// 直接 `GetCompressedTexture2D` 一个不存在的路径会抛异常，
+    /// 2026-11-23 就是这样把 `SimulateOrbs` 打断、面板变成 `=0` 的。
+    /// 不同版本的图片命名可能不同，所以按候选名逐个试。
+    /// </summary>
+    private static Texture2D? TryLoadFrostOrbIconDirect()
+    {
+        if (_frostOrbIconLoaded)
+        {
+            return _frostOrbIconCache;
+        }
+
+        _frostOrbIconLoaded = true;
+
+        // ① 先从**已注册的资源**里找（不依赖硬编码路径，最稳）：
+        //    `AssetCache.GetCacheKeys()` 能列出游戏已加载的所有资源路径。
+        try
+        {
+            foreach (string key in PreloadManager.Cache.GetCacheKeys())
+            {
+                string lower = key.ToLowerInvariant();
+
+                if (lower.Contains("frost") && lower.Contains("orb")
+                    && lower.EndsWith(".png", StringComparison.Ordinal))
+                {
+                    var icon = PreloadManager.Cache.GetCompressedTexture2D(key);
+
+                    if (icon != null)
+                    {
+                        _frostOrbIconCache = icon;
+                        BlockPreviewLog.Perf($"[诊断] 冰球图标加载成功: {key}");
+                        return icon;
+                    }
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        // ② 回退：按候选路径逐个试
+        string[] candidates =
+        {
+            "orbs/frost.png",
+            "orbs/frost_orb.png",
+            "orbs/orb_frost.png",
+        };
+
+        foreach (string candidate in candidates)
+        {
+            try
+            {
+                string path = ImageHelper.GetImagePath(candidate);
+
+                if (!Godot.FileAccess.FileExists(path))
+                {
+                    continue;
+                }
+
+                _frostOrbIconCache = PreloadManager.Cache.GetCompressedTexture2D(path);
+
+                if (_frostOrbIconCache != null)
+                {
+                    BlockPreviewLog.Perf($"[诊断] 冰球图标加载成功: {path}");
+                    return _frostOrbIconCache;
+                }
+            }
+            catch
+            {
+                // 单个候选失败不影响其它候选
+            }
+        }
+
+        BlockPreviewLog.Perf("[诊断] 冰球图标未找到，退回格挡图标");
+        return _frostOrbIconCache;
+    }
+
+    /// <summary>
+    /// 取冰球图标：**只用场上真实冰球的 Icon**，并缓存下来。
+    ///
+    /// ⚠️ 不能读 `ModelDb.Orb&lt;FrostOrb&gt;().Icon`（Canonical 模板会触发模型校验异常），
+    /// 也不要按 `res://images/orbs/xxx.png` 直接加载 —— 2026-11-23 实测：路径加载会抛异常，
+    /// 把整个 `SimulateOrbs` 打断，面板直接变成 `=0`。
+    ///
+    /// 所以策略是：场上出现过冰球 → 缓存它的图标；没出现过 → 退回格挡图标。
     /// </summary>
     private static Texture2D? GetFrostOrbIcon(Creature? creature)
     {
@@ -7105,17 +7256,24 @@ public static class BlockPreviewDisplay
                 {
                     if (orb is FrostOrb frost)
                     {
-                        return frost.Icon;
+                        _frostOrbIconCache = frost.Icon;
+
+                        if (_frostOrbIconCache != null)
+                        {
+                            return _frostOrbIconCache;
+                        }
+
+                        break;
                     }
                 }
             }
         }
         catch (Exception e)
         {
-            GD.Print($"[{MainFile.ModId}] 取冰球图标失败: {e.Message}");
+            BlockPreviewLog.Perf($"[诊断] 取冰球图标失败: {e.Message}");
         }
 
-        return null;
+        return TryLoadFrostOrbIconDirect() ?? _frostOrbIconCache ?? FindBlockIcon();
     }
 
     /// <summary>
@@ -7296,6 +7454,19 @@ public static class BlockPreviewDisplay
         }
 
         return _evokeIcon;
+    }
+
+    /// <summary>吞噬暗影（`ConsumingShadowPower`）的状态图标：它那段激发用这个。</summary>
+    private static Texture2D? GetConsumingShadowIcon()
+    {
+        try
+        {
+            return ModelDb.Power<ConsumingShadowPower>().Icon;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -7531,6 +7702,8 @@ public static class BlockPreviewDisplay
     private static string _lastLayoutMode = string.Empty;
 
     private static string _lastTipHitDesc = string.Empty;
+    private static string _lastOrbDbg = string.Empty;
+    private static string _lastPanelDbg = string.Empty;
 
     /// <summary>诊断：让位判据命中时打一行（只在变化时），确认面板到底有没有被判定为"该让位"。</summary>
     private static void LogTipHit(Node owner)
