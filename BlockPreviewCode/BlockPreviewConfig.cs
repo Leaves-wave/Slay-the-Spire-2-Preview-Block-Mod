@@ -82,6 +82,15 @@ public class BlockPreviewConfig : SimpleModConfig
     public static bool ShowEstimateLine { get; set; } = true;
 
     /// <summary>
+    /// 第一行末尾显示「本回合**即将受到**的攻击伤害」：`-X [剑]`（红色），
+    /// 致死时显示 `-NAN [灾厄]`。
+    ///
+    /// 计算：敌人攻击意图合计 − 本次预览的精确总格挡。
+    /// 已考虑无实体 / 难杀 / 缓冲 / 孤注一掷（未格挡攻击即死）。
+    /// </summary>
+    public static bool ShowIncomingDamage { get; set; } = true;
+
+    /// <summary>
     /// 药水行（**独立的第三行**）：手里能直接给格挡的药水，
     /// 格式 `{确定总格挡} [盾] +X [药水1] +N [药水2] … =喝药后总值 [盾]`。
     ///

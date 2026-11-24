@@ -41,6 +41,7 @@ internal static class ConfigLocalization
         ("SelectScreenX", "Secondary UI X", "进入二级UI位置 X"),
         ("SelectScreenY", "Secondary UI Y", "进入二级UI位置 Y"),
         ("ShowEstimateLine", "Show estimate line", "显示估算行"),
+        ("ShowIncomingDamage", "Show incoming damage", "显示即将受到的伤害"),
 
         // 各段显示开关
         ("ShowHandBlock", "Show selected card block", "显示选中手牌格挡"),
@@ -149,6 +150,7 @@ internal static class ConfigLocalization
         ("SelectScreenX", "進入二級UI位置 X", "サブ画面 UI X", "보조 화면 UI X"),
         ("SelectScreenY", "進入二級UI位置 Y", "サブ画面 UI Y", "보조 화면 UI Y"),
         ("ShowEstimateLine", "顯示估算行", "推定行を表示", "추정 행 표시"),
+        ("ShowIncomingDamage", "顯示即將受到的傷害", "次に受けるダメージを表示", "받을 피해 표시"),
 
         ("ShowHandBlock", "顯示選中手牌格擋", "選択中の手札のブロックを表示", "선택한 카드의 방어도 표시"),
         ("ShowDamageBlock", "顯示傷害轉格擋", "ダメージ→ブロックを表示", "피해→방어도 표시"),

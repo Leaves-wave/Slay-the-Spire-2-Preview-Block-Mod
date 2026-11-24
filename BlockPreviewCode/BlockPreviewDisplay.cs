@@ -25,6 +25,7 @@ using MegaCrit.Sts2.Core.Models.Enchantments;
 using MegaCrit.Sts2.Core.Models.Orbs;
 using MegaCrit.Sts2.Core.Models.Potions;
 using MegaCrit.Sts2.Core.Models.Powers;
+using MegaCrit.Sts2.Core.MonsterMoves.Intents;
 using MegaCrit.Sts2.Core.Models.Relics;
 using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Combat;
@@ -1751,10 +1752,13 @@ public static class BlockPreviewDisplay
         _panel.SetValues(values);
 
         // 临时诊断：确认最终传给面板的值（用来区分"没算出来"和"算了但没显示"）
-        if (values.FrostBlock > 0 || values.TotalBlock > 0)
+        if (values.FrostBlock > 0 || values.TotalBlock > 0
+            || values.IncomingDamage > 0 || values.IncomingUnblockable > 0 || values.IncomingFatal)
         {
             string panelDbg = $"面板值: frost={values.FrostBlock} evoke={values.EvokeBlock}"
-                              + $" overflow={values.OverflowBlock} total={values.TotalBlock}";
+                              + $" overflow={values.OverflowBlock} total={values.TotalBlock}"
+                              + $" incoming={values.IncomingDamage} unblockable={values.IncomingUnblockable}"
+                              + $" fatal={values.IncomingFatal}";
 
             if (panelDbg != _lastPanelDbg)
             {
@@ -1801,11 +1805,17 @@ public static class BlockPreviewDisplay
             return;
         }
 
+        var frozenSide = _playerCreature?.CombatState?.CurrentSide ?? CombatSide.Player;
+
         // 遗物详情 / 生物状态栏 / 单个状态图标出现时先让位，
         // 否则面板的 ZIndex=100 会盖在它们上面（用户反馈 2026-11-21）。
         // 另外「点开某个遗物」的查看界面、牌组查看、地图、设置、牌堆浏览
         // 都会盖住面板，也一并让位。
-        if (IsBlockingHoverTipVisible() || IsInspectRelicScreenVisible() || IsFullScreenOverlayVisible())
+        //
+        // ⚠️ 敌人回合不隐藏：回合结束时会出现各种临时 UI / 叠加层，
+        // 走让位逻辑会把整个面板藏掉；而我们只是要定格红色受伤数字（2026-11-24）。
+        if (frozenSide != CombatSide.Enemy
+            && (IsBlockingHoverTipVisible() || IsInspectRelicScreenVisible() || IsFullScreenOverlayVisible()))
         {
             if (_panel != null && GodotObject.IsInstanceValid(_panel) && _panel.Visible)
             {
@@ -1996,13 +2006,44 @@ public static class BlockPreviewDisplay
 
         int persistentTotal = persistentCertain + (invincibleCertain ? 0 : invincibleBlock);
 
+        // 即将受到的攻击伤害（敌人意图 − 当前确定性总格挡）
+        //
+        // 只冻结**红色受伤数字**本身：玩家回合实时更新，进入敌人回合后定格，
+        // 之后的格挡消耗、手牌/状态结算都不会再改变它（2026-11-24）。
+        int persistentIncoming = 0;
+        int persistentUnblockable = 0;
+        bool persistentFatal = false;
+
+        if (BlockPreviewConfig.ShowIncomingDamage)
+        {
+            if (frozenSide == CombatSide.Enemy && _frozenIncomingSide == CombatSide.Player)
+            {
+                persistentIncoming = _frozenIncoming;
+                persistentUnblockable = _frozenUnblockable;
+                persistentFatal = _frozenFatal;
+            }
+            else
+            {
+                persistentIncoming = GetIncomingDamage(
+                    _playerCreature!, persistentCertain, out persistentFatal, out persistentUnblockable);
+
+                _frozenIncoming = persistentIncoming;
+                _frozenUnblockable = persistentUnblockable;
+                _frozenFatal = persistentFatal;
+                _frozenIncomingSide = frozenSide;
+            }
+        }
+
         // 药水常驻显示在**第三行**（固定值，和"打牌的估算"分开）。
         var persistentPotions = BlockPreviewConfig.ShowPotion
             ? GetPotionPreviews(persistentPlayer)
             : new List<PotionPreview>();
 
-        _panel.SetValues(new BlockPreviewValues
+        var values = new BlockPreviewValues
         {
+            IncomingDamage = persistentIncoming,
+            IncomingUnblockable = persistentUnblockable,
+            IncomingFatal = persistentFatal,
             HandBlock = handBlock,
             PlatingBlock = platingBlock,
             FrostBlock = frostBlock,
@@ -2034,7 +2075,9 @@ public static class BlockPreviewDisplay
             PlatingIcon = platingIcon,
             FrostIcon = frostIcon,
             FeelNoPainIcon = feelNoPainIcon,
-        });
+        };
+
+        _panel.SetValues(values);
 
         ApplyLayout();
 
@@ -2489,20 +2532,8 @@ public static class BlockPreviewDisplay
             }
         }
 
-        cardContributes = handBlock > 0 || damageBlock > 0 || mirageBlock > 0
-                          || escapePlanBlock > 0 || extraPlayBlock > 0
-                          || starChildBlock > 0 || starPillarBlock > 0
-                          || ostySummonBlock > 0 || ostyHealBlock > 0
-                          || deathDoorBlock > 0 || doomCloakBlock > 0
-                          || invincibleBlock > 0
-                          || cardPlatingBlock > 0
-                          // ⚠️ 冰球被动必须算进来：只产冰球的牌（长枪 / 寒流 / 冰霜新星…）
-                          // 没有手牌格挡，漏掉这条会被判成"无收益"，面板直接不显示（2026-11-23）。
-                          || frostBlock > 0
-                          || evokeBlock > 0 || overflowBlock > 0 || danseBlock > 0 || rageBlock > 0
-                          || afterimageBlock > 0 || fiendFireBlock > 0
-                          || spiritOfAshBlock > 0 || fastenBlock > 0
-                          || fiendFireReplayBlock > 0 || secondWindReplayBlock > 0;
+        // `cardContributes` 改到函数末尾用 `HasAnyValue(values)` 自动判定，
+        // 不再手写一长串条件（漏一个就会导致整块面板不显示，已踩过三次：2026-11-24）。
 
         // 第一行只放「确定」的段。
         // 第二行（估算行）收容所有**不确定**的项：
@@ -2557,18 +2588,7 @@ public static class BlockPreviewDisplay
             fakeOrichalcumBlock = Show(BlockPreviewConfig.ShowOrichalcum, fakeOrichalcumBlock);
         }
 
-        // 遗物段也要算进"这张牌是否带来格挡"的判定
-        cardContributes = cardContributes
-                          || boneFluteBlock > 0 || cloakClaspBlock > 0
-                          || windDaughterBlock > 0 || orichalcumBlock > 0
-                          || fakeOrichalcumBlock > 0
-                          || rippleBasinBlock > 0 || toughBandagesBlock > 0
-                          || galacticDustBlock > 0 || ornamentalFanBlock > 0
-                          || tuningForkBlock > 0 || intimidatingHelmetBlock > 0
-                          || permafrostBlock > 0 || regaliteBlock > 0
-                          || goldCablesBlock > 0 || abacusBlock > 0
-                          || twineBlock > 0 || songPathBlock > 0 || lullabyBlock > 0
-                          || allIsWellBlock > 0;
+        // 遗物段不再手动并入 `cardContributes`：末尾的 `HasAnyValue(values)` 会自动覆盖。
 
         // 所向无敌和逃脱计划一样是**概率性**收益：只有 100% 才算确定值进第一行。
         bool invincibleCertain = invincibleBlock > 0 && invinciblePercent >= 100;
@@ -2600,8 +2620,23 @@ public static class BlockPreviewDisplay
         int realBlock = Math.Max(0,
             certainTotal - ostySummonBlock - ostyHealBlock - ostyHpBlock);
 
-        return new BlockPreviewValues
+        // 即将受到的攻击伤害（敌人意图 − 确定总格挡）
+        int incomingDamage = 0;
+        int incomingUnblockable = 0;
+        bool incomingFatal = false;
+
+        if (BlockPreviewConfig.ShowIncomingDamage)
         {
+            incomingDamage = GetIncomingDamage(
+                creature, certainTotal, out incomingFatal, out incomingUnblockable,
+                card, GetHoverTarget(card));
+        }
+
+        var values = new BlockPreviewValues
+        {
+            IncomingDamage = incomingDamage,
+            IncomingUnblockable = incomingUnblockable,
+            IncomingFatal = incomingFatal,
             HandBlock = handBlock,
             DamageBlock = damageBlock,
             PoisonBlock = mirageBlock,
@@ -2698,6 +2733,314 @@ public static class BlockPreviewDisplay
             DamageIcon = damageBlock > 0 ? GetStrengthIcon() : null,
             PoisonIcon = mirageBlock > 0 ? mirageIcon : null,
         };
+
+        // 自动判定「这张牌是否有任何收益」：任何一个 int 段非 0 就显示面板。
+        // 用反射遍历所有字段，以后新增段会自动包含（2026-11-24）。
+        cardContributes = HasAnyValue(values);
+
+        return values;
+    }
+
+    /// <summary>
+    /// 这份预览里是否有任何非 0 的数值段。
+    /// 用反射遍历 <see cref="BlockPreviewValues"/> 的所有 int 属性，
+    /// 避免再手写一长串 `||` 条件（漏一个就整块面板不显示，已踩过三次）。
+    /// </summary>
+    private static bool HasAnyValue(BlockPreviewValues values)
+    {
+        foreach (var prop in typeof(BlockPreviewValues).GetProperties())
+        {
+            if (prop.PropertyType != typeof(int))
+            {
+                continue;
+            }
+
+            if (prop.GetValue(values) is int v && v != 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 本回合玩家**即将受到**的攻击伤害：敌人意图 + 缠绕 − 精确总格挡。
+    ///
+    /// `unblockable` 单独输出「无视格挡的生命流失」（毒）。
+    /// 诅咒 `Regret`、灾厄等特殊体系暂不计入。
+    /// </summary>
+    private static int GetIncomingDamage(
+        Creature creature,
+        int block,
+        out bool fatal,
+        out int unblockable,
+        CardModel? card = null,
+        Creature? hoverTarget = null)
+    {
+        fatal = false;
+        unblockable = 0;
+
+        var state = creature.CombatState;
+
+        if (state == null)
+        {
+            return 0;
+        }
+
+        int attack = 0;
+        bool hasAttackIntent = false;
+        var targets = new List<Creature> { creature };
+
+        // 与我一战（FightMe）：打出后目标敌人 +1 力量 → 意图伤害每段 +1
+        bool fightMe = card is FightMe;
+
+        foreach (var enemy in state.HittableEnemies)
+        {
+            var monster = enemy.Monster;
+
+            if (monster == null || !enemy.IsAlive)
+            {
+                continue;
+            }
+
+            foreach (var intent in monster.NextMove.Intents)
+            {
+                if (intent is AttackIntent attackIntent)
+                {
+                    int dmg = Math.Max(0, attackIntent.GetTotalDamage(targets, enemy));
+
+                    // 与我一战：**只有选中敌人时**才 +1 力量（每段 +1）。
+                    // 拖起但还没指向目标时不算，否则所有敌人的意图都会被 +1，数值虚高（2026-11-24）。
+                    if (fightMe && hoverTarget != null && enemy == hoverTarget)
+                    {
+                        dmg += Math.Max(1, attackIntent.Repeats);
+                    }
+
+                    attack += dmg;
+                    hasAttackIntent = true;
+                }
+            }
+        }
+
+        // 诊断：确认「与我一战」的悬停目标识别是否正确
+        if (card is FightMe)
+        {
+            BlockPreviewLog.Perf(
+                $"[诊断] FightMe: hover={(hoverTarget == null ? "null" : hoverTarget.GetType().Name)}"
+                + $" attack={attack} enemies={state.HittableEnemies.Count(e => e.IsAlive && e.Monster != null)}");
+        }
+
+        // ⚠️ 这里**不能**再乘肉盾/易伤/拦截/掩护/被包围的倍率：
+        // `AttackIntent.GetSingleDamage` 内部已经调用
+        //   Hook.ModifyDamage(..., target: 玩家, dealer: 怪物, ...)
+        // 返回的就是**最终值**（含玩家身上所有 ModifyDamageMultiplicative）。
+        // 再乘一遍就是重复计算（2026-11-24 修正）。
+
+        // 缠绕（ConstrictPower）：回合结束的伤害，**受格挡**
+        int constrict = GetConstrictDamage(creature);
+
+        // 瓦解（DisintegrationPower）：回合结束的伤害，**受格挡**
+        int disintegration = GetDisintegrationDamage(creature);
+
+        // 毒（PoisonPower）：下回合开始的生命流失，**无视格挡**
+        int poison = GetPoisonDamage(creature);
+
+        // 手牌里的诅咒 / 状态牌：Burn / Decay 受格挡，Regret 不可格挡
+        int handCurse = 0;
+        int handCurseUnblockable = 0;
+
+        if (creature.Player != null)
+        {
+            handCurse = GetHandCurseDamage(creature.Player, out handCurseUnblockable, card);
+        }
+
+        // 正在拖的这张牌如果是「失去生命」类，也要算上：
+        // 拖起时它可能已经从手牌堆移出，扫手牌扫不到（2026-11-24）。
+        // （「至亮之焰」BrightestFlame 是失去最大生命，按约定不计入。）
+        if (card is Bloodletting or Offering or Hemokinesis)
+        {
+            handCurseUnblockable += Math.Max(0, card.DynamicVars.HpLoss.IntValue);
+        }
+
+        if (!hasAttackIntent && constrict <= 0 && disintegration <= 0
+            && poison <= 0 && handCurse <= 0 && handCurseUnblockable <= 0)
+        {
+            return 0;
+        }
+
+        int blockable = attack + constrict + disintegration + handCurse;
+        int blockableUnblocked = Math.Max(0, blockable - block);
+
+        // 孤注一掷只认「未被格挡的**攻击**伤害」，缠绕/毒/诅咒都不触发
+        bool attackHits = attack > 0 && attack > block;
+        int totalUnblockable = poison + handCurseUnblockable;
+
+        // 心脏碎片：每回合最多失去 20 点生命（只限制"失去生命"部分）
+        int cap = GetBeatingRemnantCap(creature);
+
+        if (cap > 0 && totalUnblockable > cap)
+        {
+            totalUnblockable = cap;
+        }
+
+        unblockable = totalUnblockable;
+
+        int total = blockableUnblocked + totalUnblockable;
+
+        if (total <= 0)
+        {
+            return 0;
+        }
+
+        fatal = WouldDieFromAttackDamage(creature, total, attackHits);
+
+        return blockableUnblocked;
+    }
+
+    /// <summary>
+    /// 手牌里的诅咒 / 状态牌在回合结束时造成的伤害。
+    /// `Burn`（燃烧）/ `Decay`（腐朽）走正常伤害（**受格挡**）；
+    /// `Regret`（后悔）每张造成「手牌数」点、**不可格挡**。
+    /// </summary>
+    private static int GetHandCurseDamage(Player player, out int unblockable, CardModel? excludeCard = null)
+    {
+        unblockable = 0;
+        int blockable = 0;
+
+        try
+        {
+            var hand = PileType.Hand.GetPile(player).Cards;
+
+            foreach (var card in hand)
+            {
+                if (card == excludeCard)
+                {
+                    continue;
+                }
+
+                switch (card)
+                {
+                    // 受格挡（回合结束 CreatureCmd.Damage）
+                    case Burn:          // 燃烧 2
+                    case Decay:         // 腐朽
+                    case Toxic:         // 毒素 5
+                    case Infection:     // 感染 3
+                    case Wither:        // 凋萎 3（沙漏 BOSS 每次 FakeUpgrade 再 +3，DynamicVars 已含）
+                        blockable += Math.Max(0, card.DynamicVars.Damage.IntValue);
+                        break;
+
+                    // 失去生命（HpLoss）：无视格挡，也不触发孤注一掷
+                    case Beckon:        // 呼唤 6
+                        unblockable += Math.Max(0, card.DynamicVars.HpLoss.IntValue);
+                        break;
+
+                    // 后悔：每张造成「手牌数」点不可格挡伤害
+                    case Regret:
+                        unblockable += hand.Count;
+                        break;
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return blockable;
+    }
+
+    /// <summary>缠绕（ConstrictPower）：回合结束受到 Amount 点伤害（受格挡）。</summary>
+    private static int GetConstrictDamage(Creature creature)
+    {
+        return Math.Max(0, creature.GetPowerAmount<ConstrictPower>());
+    }
+
+    /// <summary>瓦解（DisintegrationPower）：回合结束受到 Amount 点伤害（受格挡）。</summary>
+    private static int GetDisintegrationDamage(Creature creature)
+    {
+        return Math.Max(0, creature.GetPowerAmount<DisintegrationPower>());
+    }
+
+    /// <summary>毒（PoisonPower）：下回合开始的生命流失（无视格挡）。</summary>
+    private static int GetPoisonDamage(Creature creature)
+    {
+        try
+        {
+            var poison = creature.GetPower<PoisonPower>();
+
+            return poison == null ? 0 : Math.Max(0, poison.CalculateTotalDamageNextTurn());
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>心脏碎片（BeatingRemnant）：每回合最多失去的生命（默认 20）。没有遗物返回 int.MaxValue。</summary>
+    private static int GetBeatingRemnantCap(Creature creature)
+    {
+        try
+        {
+            var relic = GetRelic<BeatingRemnant>(creature.Player);
+
+            if (relic == null)
+            {
+                return int.MaxValue;
+            }
+
+            return Math.Max(0, relic.DynamicVars["MaxHpLoss"].IntValue);
+        }
+        catch
+        {
+            return int.MaxValue;
+        }
+    }
+
+    /// <summary>
+    /// 受到 `unblocked` 点伤害后是否会死。
+    /// 考虑：无实体（伤害变 1）、难杀（上限）、缓冲（吸收一次）、孤注一掷（未格挡攻击即死）。
+    /// </summary>
+    private static bool WouldDieFromAttackDamage(Creature creature, int unblocked, bool attackHits = true)
+    {
+        int hp = creature.CurrentHp;
+
+        if (hp <= 0)
+        {
+            return false;
+        }
+
+        // 无实体：所有伤害变 1，通常不会致死
+        if (creature.HasPower<IntangiblePower>())
+        {
+            unblocked = 1;
+        }
+
+        // 难杀：单次伤害上限 = 层数
+        int cap = creature.GetPowerAmount<HardToKillPower>();
+
+        if (cap > 0)
+        {
+            unblocked = Math.Min(unblocked, cap);
+        }
+
+        // 孤注一掷：只要受到**未被格挡的攻击伤害**就死（缠绕/毒/诅咒不触发）
+        if (attackHits && unblocked > 0 && creature.HasPower<TheGambitPower>())
+        {
+            return true;
+        }
+
+        if (unblocked < hp)
+        {
+            return false;
+        }
+
+        // 缓冲：每层抵消一次 HP 损失 → 不死
+        if (creature.GetPowerAmount<BufferPower>() > 0)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -2714,6 +3057,71 @@ public static class BlockPreviewDisplay
     /// 重放 / 爆发等会让它播多次，每次都 +1 层，所以传的是总播放次数。
     /// </para>
     /// </summary>
+    /// <summary>攻击意图的剑图标（第一行末尾的「即将受到伤害」用）。</summary>
+    public static Texture2D? GetIntentAttackIcon()
+    {
+        if (_intentAttackIconResolved)
+        {
+            return _intentAttackIcon;
+        }
+
+        _intentAttackIconResolved = true;
+
+        // `AttackIntent.AssetPaths` 里真实的图标是 `attack/intent_attack_{1..5}.tres`，
+        // 不是 `intent_attack.tres`；而且它们是 `AtlasTexture`，要用 `GetAsset<AtlasTexture>` 取。
+        try
+        {
+            _intentAttackIcon = PreloadManager.Cache.GetAsset<AtlasTexture>(
+                ImageHelper.GetImagePath("atlases/intent_atlas.sprites/attack/intent_attack_3.tres"));
+        }
+        catch
+        {
+        }
+
+        if (_intentAttackIcon == null)
+        {
+            try
+            {
+                _intentAttackIcon = PreloadManager.Cache.GetAsset<AtlasTexture>(
+                    ImageHelper.GetImagePath("atlases/intent_atlas.sprites/attack/intent_attack_1.tres"));
+            }
+            catch
+            {
+            }
+        }
+
+        return _intentAttackIcon;
+    }
+
+    private static Texture2D? _intentAttackIcon;
+    private static bool _intentAttackIconResolved;
+
+    /// <summary>瓦解（DisintegrationPower）的图标（无视格挡段 `-Y` 用）。</summary>
+    public static Texture2D? GetDisintegrationIcon()
+    {
+        try
+        {
+            return ModelDb.Power<DisintegrationPower>().Icon;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>致死时用的灾厄图标（孤注一掷 `TheGambitPower` 的图标）。</summary>
+    public static Texture2D? GetFatalIcon()
+    {
+        try
+        {
+            return ModelDb.Power<TheGambitPower>().Icon;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static int GetBlockGainMultiplier(Creature? creature, int extraStacks = 0)
     {
         var power = creature?.GetPower<ShadowmeldPower>();
@@ -3560,8 +3968,18 @@ public static class BlockPreviewDisplay
 
                 // 灰水（Ashwater）特殊：它消耗任意张手牌，能拿多少格挡完全取决于玩家选几张。
                 // 所以这里不显示格挡（算不出），只显示**最多能烧几张**（手牌数），并标 ?
+                //
+                // ⚠️ 收益完全来自「无惧疼痛」：每烧一张 = 层数点格挡。
+                // 没有该状态时烧多少张都是 0 → 不显示（2026-11-24 用户反馈）。
                 if (potion is Ashwater)
                 {
+                    int feelNoPainStacks = player.Creature?.GetPowerAmount<FeelNoPainPower>() ?? 0;
+
+                    if (feelNoPainStacks <= 0)
+                    {
+                        continue;
+                    }
+
                     int handCards = PileType.Hand.GetPile(player).Cards.Count;
 
                     if (handCards > 0)
@@ -7381,7 +7799,7 @@ public static class BlockPreviewDisplay
     /// <summary>
     /// 蜃景那一段的图标：中毒（Poison）的状态图标。
     /// </summary>
-    private static Texture2D? GetPoisonIcon()
+    public static Texture2D? GetPoisonIcon()
     {
         if (_poisonIconResolved)
         {
@@ -7704,6 +8122,12 @@ public static class BlockPreviewDisplay
     private static string _lastTipHitDesc = string.Empty;
     private static string _lastOrbDbg = string.Empty;
     private static string _lastPanelDbg = string.Empty;
+
+    // 只冻结红色受伤数字（-X）：玩家回合实时更新，进入敌人回合后定格，不再随格挡消耗跳动
+    private static int _frozenIncoming;
+    private static int _frozenUnblockable;
+    private static bool _frozenFatal;
+    private static CombatSide _frozenIncomingSide = CombatSide.Player;
 
     /// <summary>诊断：让位判据命中时打一行（只在变化时），确认面板到底有没有被判定为"该让位"。</summary>
     private static void LogTipHit(Node owner)

@@ -261,6 +261,18 @@ public readonly record struct BlockPreviewValues
     /// </summary>
     public int EstimatedTotalBlock { get; init; }
 
+    /// <summary>
+    /// 本回合**即将受到**的攻击伤害（已减去 <see cref="TotalBlock"/>）。
+    /// 显示在第一行末尾：`-X [剑]`（红色），致死时显示 `-NAN [灾厄]`。
+    /// </summary>
+    public int IncomingDamage { get; init; }
+
+    /// <summary>这一击是否致死（受无实体 / 难杀 / 缓冲 / 孤注一掷影响）。</summary>
+    public bool IncomingFatal { get; init; }
+
+    /// <summary>无视格挡的生命流失（毒）：单独显示 `-Y [毒]`。</summary>
+    public int IncomingUnblockable { get; init; }
+
     public Texture2D? PlatingIcon { get; init; }
 
     public Texture2D? FrostIcon { get; init; }
@@ -310,6 +322,13 @@ public partial class BlockPreviewPanel : Control
     private VBoxContainer? _root;
     private HBoxContainer? _content;
     private Label? _totalLabel;
+    private Label? _incomingLabel;
+    private TextureRect? _incomingIcon;
+    private Label? _unblockableLabel;
+    private TextureRect? _unblockableIcon;
+
+    /// <summary>「即将受到伤害」两段的红色（套完字体后要重新覆盖，因为 ApplyFontTo 会强制白色）。</summary>
+    private static readonly Color DamageRed = new(1.0f, 0.35f, 0.3f);
 
     /// <summary>
     /// 第二行（估算行）：`=确定值 [盾] +不确定项… =含估算值? [盾]`。
@@ -694,6 +713,12 @@ public partial class BlockPreviewPanel : Control
         _content.AddChild(_totalLabel);
         _content.AddChild(MakeIcon(IconTexture));
 
+        // 第一行末尾：本回合**即将受到**的伤害（红色，所有来源合并成一个数；不带图标）
+        _incomingLabel = MakeLabel("IncomingDamage");
+        _incomingLabel.AddThemeColorOverride("font_color", DamageRed);
+        _incomingLabel.Visible = false;
+        _content.AddChild(_incomingLabel);
+
         // 第二行（估算行）：
         //   =确定值 [盾]  +N A% [概率项…]  +N? [估算项…]  =含估算值? [盾]
         // 所有"不确定"的项都集中在这里；没有不确定项时整行隐藏。
@@ -889,6 +914,9 @@ public partial class BlockPreviewPanel : Control
 
             changed = true;
         }
+
+        // 第一行末尾：即将受到的攻击伤害（红色 -X [剑]，致死 -NAN [灾厄]）
+        UpdateIncoming(values);
 
         // ---- 第二行：所有不确定项 ----
         // 布局：=确定值 [盾] +N A% [概率项] +N? [估算项] =含估算值? [盾]
@@ -1226,6 +1254,43 @@ public partial class BlockPreviewPanel : Control
         };
     }
 
+    /// <summary>
+    /// 更新第一行末尾的「即将受到伤害」：把所有来源合并成 `-X`（红色），致死显示 `-NAN`。
+    /// 图标已按玩家反馈去掉（分开的图标不直观）。
+    /// </summary>
+    private void UpdateIncoming(BlockPreviewValues values)
+    {
+        int total = values.IncomingDamage + values.IncomingUnblockable;
+        bool show = total > 0 || values.IncomingFatal;
+
+        if (_incomingLabel != null)
+        {
+            _incomingLabel.Visible = show;
+
+            if (show)
+            {
+                // 致死时在数值后面追加 " NAN"（玩家反馈纯 -NAN 看不出伤害量，不直观）
+                _incomingLabel.Text = values.IncomingFatal ? $" -{total} NAN" : $" -{total}";
+            }
+        }
+
+        // 图标 / 第二段一律不显示
+        if (_incomingIcon != null)
+        {
+            _incomingIcon.Visible = false;
+        }
+
+        if (_unblockableLabel != null)
+        {
+            _unblockableLabel.Visible = false;
+        }
+
+        if (_unblockableIcon != null)
+        {
+            _unblockableIcon.Visible = false;
+        }
+    }
+
     private static TextureRect MakeIcon(Texture2D? texture)
     {
         return new TextureRect
@@ -1285,6 +1350,20 @@ public partial class BlockPreviewPanel : Control
         ApplyFontTo(_lullabyRow?.Label, template);
         ApplyFontTo(_allIsWellRow?.Label, template);
         ApplyFontTo(_totalLabel, template);
+        ApplyFontTo(_incomingLabel, template);
+        ApplyFontTo(_unblockableLabel, template);
+
+        // `ApplyFontTo` 会把 font_color 强制成白色（其它段都是白的），
+        // 但这两段是"受伤提示"，必须保持红色 —— 所以套完字体后再覆盖一次。
+        if (_incomingLabel != null)
+        {
+            _incomingLabel.AddThemeColorOverride("font_color", DamageRed);
+        }
+
+        if (_unblockableLabel != null)
+        {
+            _unblockableLabel.AddThemeColorOverride("font_color", DamageRed);
+        }
 
         // 第二行（估算行）
         ApplyFontTo(_estimateBaseLabel, template);
