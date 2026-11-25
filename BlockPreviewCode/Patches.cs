@@ -6,6 +6,7 @@ using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Multiplayer.Game.PeerInput;
+using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.ValueProps;
 
@@ -29,15 +30,22 @@ internal static class PlayerHealthBarPatch
 
 /// <summary>
 /// 卡牌被拖出（开始选目标）时触发。
-/// 游戏内部经由 NPlayerHand.StartCardPlay 调用 HoveredModelTracker.OnLocalCardSelected。
+///
+/// ⚠️ 2026-11-25：0.114.0 实测 `HoveredModelTracker.OnLocalCardSelected` 不再被调用
+/// （诊断日志里 `Show 入口` 一次都没出现），改挂更上游的 `NPlayerHand.StartCardPlay`。
 /// </summary>
-[HarmonyPatch(typeof(HoveredModelTracker), nameof(HoveredModelTracker.OnLocalCardSelected))]
+[HarmonyPatch(typeof(NPlayerHand), "StartCardPlay")]
 internal static class CardDragStartPatch
 {
     [HarmonyPostfix]
-    private static void Postfix(CardModel cardModel)
+    private static void Postfix(NHandCardHolder holder)
     {
-        BlockPreviewDisplay.Show(cardModel);
+        var model = holder?.CardModel;
+
+        if (model != null)
+        {
+            BlockPreviewDisplay.Show(model);
+        }
     }
 }
 

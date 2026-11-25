@@ -217,6 +217,40 @@ public static class BlockPreviewDisplay
     }
 
     /// <summary>
+    /// 当前是不是「选择牌来变化」的界面（新 Florescence 的转换选牌）。
+    ///
+    /// 它与「弃牌」「消耗」界面共用同一套 `NPlayerHand.SelectCards`，
+    /// 只能用 `CardSelectorPrefs.TransformSelectionPrompt` 的
+    /// `card_selection / TO_TRANSFORM` 区分（2026-11-25）。
+    /// </summary>
+    private static bool IsTransformSelection()
+    {
+        var prefs = GetSelectPrefs();
+
+        if (prefs == null)
+        {
+            return false;
+        }
+
+        var prompt = prefs.Value.Prompt;
+
+        if (prompt == null)
+        {
+            return false;
+        }
+
+        // 通用转换提示（怒放/降灵/冲锋）
+        if (prompt.LocTable == "card_selection" && prompt.LocEntryKey == "TO_TRANSFORM")
+        {
+            return true;
+        }
+
+        // 卡牌自定义的转换选牌（护驾！！！用 cards/GUARDS.selectionScreenPrompt）
+        return prompt.LocTable == "cards"
+               && prompt.LocEntryKey.EndsWith(".selectionScreenPrompt", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// 弃牌选择界面里，当前选中的**所有**奇巧技能牌合计的格挡。
     /// 每张被弃置的奇巧牌都会被自动打出，所以多选时要全部累加——不能只取最后一张。
     /// </summary>
@@ -1406,6 +1440,8 @@ public static class BlockPreviewDisplay
                 return;
             }
 
+            BlockPreviewLog.Perf($"[诊断] Show 入口: card={card.GetType().Name} barAlive={IsBarAlive()}");
+
             if (!IsBarAlive())
             {
                 return;
@@ -1441,12 +1477,23 @@ public static class BlockPreviewDisplay
     /// <summary>拖拽结束/取消时调用。常驻或调整模式下不隐藏。</summary>
     public static void Hide()
     {
-        // 净化打出后会打开选牌界面，这时先别把预览收起来，
-        // 让玩家在选牌期间仍能看到上限收益。
+        BlockPreviewLog.Perf(
+            $"[诊断] Hide: dragged={_draggedCard?.GetType().Name ?? "null"}"
+            + $" pending={_pendingSelectCard?.GetType().Name ?? "null"}");
+
+        // 净化 / 怒放打出后会打开选牌界面，这时先别把预览收起来，
+        // 让玩家在选牌期间仍能看到收益（净化＝上限，怒放＝创世之柱 / 君王矿石）。
+        //
+        // ⚠️ 怒放的变化界面既不是「弃牌」也不是「消耗」，
+        // 只能靠 `_pendingSelectCard` 这个入口识别（2026-11-25）。
+#if STS2_FOOL
+        if (_draggedCard is Purity or Florescence)
+#else
         if (_draggedCard is Purity)
+#endif
         {
             _pendingSelectCard = _draggedCard;
-            GD.Print($"[{MainFile.ModId}] pending select card = Purity");
+            GD.Print($"[{MainFile.ModId}] pending select card = {_draggedCard?.GetType().Name}");
         }
         else
         {
@@ -1720,7 +1767,16 @@ public static class BlockPreviewDisplay
         var card = _draggedCard;
         if (card == null || _panel == null || !IsBarAlive())
         {
+            BlockPreviewLog.Perf(
+                $"[诊断] DragCore 早退: card={card?.GetType().Name ?? "null"}"
+                + $" panel={_panel != null} bar={IsBarAlive()}");
             return;
+        }
+
+        if (card.GetType().Name != _lastDragCoreDbg)
+        {
+            _lastDragCoreDbg = card.GetType().Name;
+            BlockPreviewLog.Perf($"[诊断] DragCore: card={_lastDragCoreDbg}");
         }
 
         var creature = card.Owner?.Creature;
@@ -1814,9 +1870,19 @@ public static class BlockPreviewDisplay
         //
         // ⚠️ 敌人回合不隐藏：回合结束时会出现各种临时 UI / 叠加层，
         // 走让位逻辑会把整个面板藏掉；而我们只是要定格红色受伤数字（2026-11-24）。
+        //
+        // ⚠️ 选牌界面也不隐藏：变化选牌（怒放/护驾）的叠加层会被
+        // `IsFullScreenOverlayVisible` 判成"全屏"，导致面板被藏掉（2026-11-25）。
         if (frozenSide != CombatSide.Enemy
+            && !IsSelectionActive()
             && (IsBlockingHoverTipVisible() || IsInspectRelicScreenVisible() || IsFullScreenOverlayVisible()))
         {
+            BlockPreviewLog.Perf(
+                $"[诊断] 让位: tip={IsBlockingHoverTipVisible()}"
+                + $" inspect={IsInspectRelicScreenVisible()}"
+                + $" full={IsFullScreenOverlayVisible()}"
+                + $" select={IsSelectionActive()}");
+
             if (_panel != null && GodotObject.IsInstanceValid(_panel) && _panel.Visible)
             {
                 _panel.Visible = false;
@@ -1840,8 +1906,23 @@ public static class BlockPreviewDisplay
         int feelNoPainBlock = GetFeelNoPainBlock(excludeCard, _playerCreature, out var feelNoPainIcon);
 
         int handBlock = 0;
+        int starPillarBlock = 0;
+        int regaliteBlock = 0;
+        Texture2D? starPillarIcon = null;
+        Texture2D? regaliteIcon = null;
 
         // 选牌界面还开着时，把那张牌的收益也算进去。
+        //
+        // 诊断：确认选牌界面是否被识别（只写 mod 日志）。
+        if (IsSelectionActive())
+        {
+            var dbgPrefs = GetSelectPrefs();
+            BlockPreviewLog.Perf(
+                $"[诊断] 选牌界面: pending={_pendingSelectCard?.GetType().Name ?? "null"}"
+                + $" transform={IsTransformSelection()}"
+                + $" prompt={dbgPrefs?.Prompt?.LocTable}/{dbgPrefs?.Prompt?.LocEntryKey}"
+                + $" mode={NCombatRoom.Instance?.Ui?.Hand?.CurrentMode}");
+        }
         // 净化按"已选张数 + 自己"实时算，其它牌用默认算法。
         if (_pendingSelectCard != null)
         {
@@ -1862,10 +1943,22 @@ public static class BlockPreviewDisplay
                     feelNoPainBlock += (selected + 1) * fpn.Amount;
                 }
             }
+            else if (IsSelectionActive() && IsTransformSelection())
+            {
+                // 怒放这类牌在 Hide() 里会被记为 _pendingSelectCard，
+                // 所以它会进入本分支；变化选牌的收益同样要在这里算（2026-11-25）。
+                ApplyTransformSelectionPreview(
+                    out starPillarBlock, out starPillarIcon, out regaliteBlock, out regaliteIcon);
+            }
             else
             {
                 feelNoPainBlock += GetFeelNoPainBlock(_pendingSelectCard, _playerCreature, out _);
             }
+        }
+        else if (IsSelectionActive() && IsTransformSelection())
+        {
+            ApplyTransformSelectionPreview(
+                out starPillarBlock, out starPillarIcon, out regaliteBlock, out regaliteIcon);
         }
         else if (IsSelectionActive() && IsDiscardSelection())
         {
@@ -1897,6 +1990,8 @@ public static class BlockPreviewDisplay
         frostBlock *= blockMultiplier;
         goldCablesBlock *= blockMultiplier;
         evokeBlock *= blockMultiplier;
+        starPillarBlock *= blockMultiplier;
+        regaliteBlock *= blockMultiplier;
 
         // 所向无敌：只要抽牌堆里还有这张牌就常驻显示（它会在牌堆顶自动打出）。
         GetInvinciblePreview(_playerCreature?.Player,
@@ -1931,6 +2026,8 @@ public static class BlockPreviewDisplay
         evokeBlock = Show(BlockPreviewConfig.ShowEvoke, evokeBlock);
         feelNoPainBlock = Show(BlockPreviewConfig.ShowFeelNoPain, feelNoPainBlock);
         invincibleBlock = Show(BlockPreviewConfig.ShowInvincible, invincibleBlock);
+        starPillarBlock = Show(BlockPreviewConfig.ShowStarPillar, starPillarBlock);
+        regaliteBlock = Show(BlockPreviewConfig.ShowRegalite, regaliteBlock);
 
         // 常驻显示时也要带上「回合结束才结算」的遗物段，
         // 否则玩家买了奥里哈刚/斗篷扣/波纹水盆却永远看不到它们。
@@ -2000,6 +2097,7 @@ public static class BlockPreviewDisplay
 
         int persistentCertain = currentBlock + handBlock + platingBlock + frostBlock
                                 + goldCablesBlock + feelNoPainBlock + evokeBlock
+                                + starPillarBlock + regaliteBlock
                                 + cloakClaspBlock + orichalcumBlock + fakeOrichalcumBlock
                                 + rippleBasinBlock + ostyHpBlock
                                 + (invincibleCertain ? invincibleBlock : 0);
@@ -2052,6 +2150,10 @@ public static class BlockPreviewDisplay
             EvokeBlock = evokeBlock,
             EvokeIcon = evokeBlock > 0 ? evokeIcon : null,
             FeelNoPainBlock = feelNoPainBlock,
+            StarPillarBlock = starPillarBlock,
+            StarPillarIcon = starPillarBlock > 0 ? starPillarIcon : null,
+            RegaliteBlock = regaliteBlock,
+            RegaliteIcon = regaliteBlock > 0 ? regaliteIcon : null,
             InvincibleBlock = invincibleBlock,
             InvinciblePercent = invincibleBlock > 0 ? invinciblePercent : -1,
             InvincibleIcon = invincibleBlock > 0 ? invincibleIcon : null,
@@ -2392,7 +2494,7 @@ public static class BlockPreviewDisplay
         // 勒紧是 ModifyBlockAdditive 加的格挡，会被融入暗影的 Multiplicative 一起乘
         fastenBlock *= blockMultiplier;
 
-        int starChildBlock = GetChildOfTheStarsBlock(card, creature, totalPlays, out var starChildIcon);
+        int starChildBlock = GetChildOfTheStarsBlock(card!, creature, totalPlays, out var starChildIcon);
         starChildBlock *= blockMultiplier;
 
         // 这几段是真的"获得格挡"，受融入暗影影响
@@ -2440,14 +2542,13 @@ public static class BlockPreviewDisplay
         // 召唤量 / 骨手回复不是格挡，不乘融入暗影
 
         // 额外播放（爆发/复制药水/回声/遗物）那几次：第一次的收益已经在上面各段里，这里补剩下的。
-        GetExtraPlayBlock(card, extraPlays, playModifiers,
+        GetExtraPlayBlock(card!, extraPlays, playModifiers,
             handBlockSingle, mirageBlockSingle,
             danseBlockSingle * blockMultiplier,
             rageBlockSingle * blockMultiplier,
             afterimageBlockSingle * blockMultiplier,
             escapePlanBlockSingle, escapePlanPercent, tenderStep,
             out int extraPlayBlock, out int extraPlayPercent, out var extraPlayIcon);
-
         // 不可格挡（NoBlockPower）：游戏只把**卡牌来源**的格挡乘 0，
         // 能力/遗物/药水（Unpowered）给的格挡不受影响。
         // 所以预览也只归零卡牌来源的段，覆甲/冰球/遗物段照常显示。
@@ -2629,7 +2730,7 @@ public static class BlockPreviewDisplay
         {
             incomingDamage = GetIncomingDamage(
                 creature, certainTotal, out incomingFatal, out incomingUnblockable,
-                card, GetHoverTarget(card));
+                card, GetHoverTarget(card!));
         }
 
         var values = new BlockPreviewValues
@@ -3213,6 +3314,62 @@ public static class BlockPreviewDisplay
     /// 游戏里它挂的是 AfterCardGeneratedForCombat，而 CardPileCmd.AddGeneratedCardsToCombat
     /// 会对每一张加进来的牌各触发一次，所以只要数出这张牌总共会生成几张就行。
     /// </summary>
+    /// <summary>
+    /// 「变化选牌」的收益：创世之柱（按已选张数放大）+ 君王矿石（每回合一次）。
+    ///
+    /// 怒放（`_pendingSelectCard` 非空）与护驾（为空）共用同一条路径，
+    /// 张数统一按「玩家已选张数」：未选中 → 0 → 不显示（2026-11-25）。
+    /// </summary>
+    private static void ApplyTransformSelectionPreview(
+        out int pillarBlock,
+        out Texture2D? pillarIcon,
+        out int regaliteBlock,
+        out Texture2D? regaliteIcon)
+    {
+        pillarBlock = 0;
+        pillarIcon = null;
+        regaliteBlock = 0;
+        regaliteIcon = null;
+
+        int transformCount = Math.Max(0, GetSelectedCardCount());
+        var prefs = GetSelectPrefs();
+
+        if (prefs != null && prefs.Value.MaxSelect > 0)
+        {
+            transformCount = Math.Min(transformCount, prefs.Value.MaxSelect);
+        }
+
+        if (transformCount <= 0)
+        {
+            return;
+        }
+
+        var pillarPower = _playerCreature?.GetPower<PillarOfCreationPower>();
+        var regaliteRelic = GetRelic<Regalite>(_playerCreature?.Player);
+        bool regaliteUsed = HasRegaliteTriggeredThisTurn(_playerCreature?.Player);
+
+        if (pillarPower != null && pillarPower.Amount > 0)
+        {
+            // 创世之柱：每生成一张给 Amount → 按张数放大
+            pillarBlock = pillarPower.Amount * transformCount;
+            pillarIcon = pillarPower.Icon;
+        }
+
+        // 君王矿石每回合只给一次，不随张数放大
+        if (regaliteRelic != null && !regaliteUsed)
+        {
+            regaliteBlock = ReadRelicBlock(regaliteRelic);
+            regaliteIcon = regaliteRelic.Icon;
+        }
+
+        BlockPreviewLog.Perf(
+            $"[诊断] 变化选牌: count={transformCount}"
+            + $" pillar={(pillarPower?.Amount ?? 0)}"
+            + $" regalite={(regaliteRelic != null ? ReadRelicBlock(regaliteRelic) : 0)}"
+            + $" regaliteUsed={regaliteUsed}"
+            + $" starBlock={pillarBlock} regaliteBlock={regaliteBlock}");
+    }
+
     private static int GetPillarOfCreationBlock(CardModel card, Creature? creature, int totalPlays, out Texture2D? icon)
     {
         icon = null;
@@ -3221,10 +3378,13 @@ public static class BlockPreviewDisplay
 
         if (power == null || power.Amount <= 0 || totalPlays <= 0)
         {
+            LogPillarDbg($"card={card.GetType().Name} power={(power == null ? "null" : power.Amount.ToString())}");
             return 0;
         }
 
         int generated = EstimateGeneratedCardsTotal(card, totalPlays);
+
+        LogPillarDbg($"card={card.GetType().Name} plays={totalPlays} generated={generated} amount={power.Amount}");
 
         if (generated <= 0)
         {
@@ -3233,6 +3393,21 @@ public static class BlockPreviewDisplay
 
         icon = power.Icon;
         return generated * power.Amount;
+    }
+
+    private static string _lastPillarDbg = string.Empty;
+    private static string _lastDragCoreDbg = string.Empty;
+
+    /// <summary>诊断：只打印"创世之柱段"的判定数据，内容变化时才写（避免刷屏）。</summary>
+    private static void LogPillarDbg(string msg)
+    {
+        if (msg == _lastPillarDbg)
+        {
+            return;
+        }
+
+        _lastPillarDbg = msg;
+        BlockPreviewLog.Perf($"[诊断] 创世之柱: {msg}");
     }
 
     /// <summary>
@@ -3367,6 +3542,32 @@ public static class BlockPreviewDisplay
             return new GeneratedCardsSpec(1, true);
         }
 
+        // 压缩（Compact）：手牌里的状态牌全部变成 Fuel
+        if (card is Compact)
+        {
+            int statusCount = PileType.Hand.GetPile(card.Owner!).Cards
+                .Count(c => c.Type == CardType.Status);
+            return new GeneratedCardsSpec(statusCount, true);
+        }
+
+        // 原始力量（PrimalForce）：手牌里的攻击牌全部变成 GiantRock
+        if (card is PrimalForce)
+        {
+            int attackCount = PileType.Hand.GetPile(card.Owner!).Cards
+                .Count(c => c.Type == CardType.Attack);
+            return new GeneratedCardsSpec(attackCount, true);
+        }
+
+#if STS2_FOOL
+        // 喜悦之拳（PunchOfJoy）：手牌有悲伤时转换 1 张为 Joy
+        if (card is PunchOfJoy)
+        {
+            bool hasSadness = PileType.Hand.GetPile(card.Owner!).Cards
+                .Any(c => c is Sadness);
+            return new GeneratedCardsSpec(hasSadness ? 1 : 0, true);
+        }
+#endif
+
         // 齐奏 Dirge：X 费，生成 X 张灵魂放进抽牌堆
         if (card is Dirge)
         {
@@ -3402,6 +3603,8 @@ public static class BlockPreviewDisplay
         ["InfernalBlade"] = new(1, true),
         ["Largesse"] = new(1, true),
         ["ManifestAuthority"] = new(1, true),
+        // 悲痛一击（0.114.0 重做后类名变为 MourningBlow）：把自身变化为「悲伤」→ 生成 1 张
+        ["MourningBlow"] = new(1, true),
         ["Overclock"] = new(1, false),           // 灼烧进弃牌堆
         ["Rummage"] = new(1, true),              // 悲伤
         ["Splash"] = new(1, true),
@@ -4344,22 +4547,7 @@ public static class BlockPreviewDisplay
                 return 0;
             }
 
-            var genSnap = player != null ? GetHistorySnapshot(state, player) : null;
-
-            bool usedThisTurn;
-
-            if (genSnap != null)
-            {
-                usedThisTurn = genSnap.CardGeneratedThisTurn;
-            }
-            else
-            {
-                usedThisTurn = CombatManager.Instance.History.Entries
-                    .OfType<CardGeneratedEntry>()
-                    .Any(e => e.Creator == player && e.HappenedThisTurn(state));
-            }
-
-            if (usedThisTurn)
+            if (HasRegaliteTriggeredThisTurn(player))
             {
                 return 0;
             }
@@ -4372,6 +4560,38 @@ public static class BlockPreviewDisplay
 
         icon = relic.Icon;
         return ReadRelicBlock(relic);
+    }
+
+    /// <summary>
+    /// 本回合是否已经因为「生成牌」触发过君王矿石。
+    /// 提取自 <see cref="GetRegaliteBlock"/>，供「变化界面」等不需要具体卡牌的路径复用。
+    /// </summary>
+    private static bool HasRegaliteTriggeredThisTurn(Player? player)
+    {
+        try
+        {
+            var state = player?.Creature?.CombatState;
+
+            if (state == null || player == null)
+            {
+                return false;
+            }
+
+            var genSnap = GetHistorySnapshot(state, player);
+
+            if (genSnap != null)
+            {
+                return genSnap.CardGeneratedThisTurn;
+            }
+
+            return CombatManager.Instance.History.Entries
+                .OfType<CardGeneratedEntry>()
+                .Any(e => e.Creator == player && e.HappenedThisTurn(state));
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     // ==================================================================
@@ -6215,34 +6435,10 @@ public static class BlockPreviewDisplay
             return total * power.Amount * GetPlayCount(card, creature);
         }
 
-        // 怒放（Florescence）：消耗**所有**带 `CardTag.Shoot` 且不在消耗堆的牌
-        // （`Florescence.OnPlay` 里遍历 `PlayerCombatState.AllCards`）——
-        // 手牌 / 抽牌堆 / 弃牌堆 / 打出堆全算，**包括以前生成过、还没消耗的 `TheShot`**。
-        // 每张触发一次无惧疼痛，然后它自己也会因为自带 Exhaust 被消耗一次。
-        //
-        // 两个细节：
-        //   - 手牌里的**虚无** Shoot 牌本来回合结束也要消耗，提前烧掉是净增 0，
-        //     它们已经计入 `etherealCount`，这里要减掉避免重复
-        //   - 多段播放时第一次就烧光了，后面的播放没有 Shoot 牌可烧，
-        //     所以 Shoot 张数只算一次（自身 Exhaust 仍按播放次数算）
-#if STS2_FOOL
-        if (card is Florescence)
-        {
-            int plays = GetPlayCount(card, creature);
-            int shootCount = CountShootCardsOutsideExhaust(player);
-            int etherealShoot = CountEtherealShootInHand(card, player);
-
-            int total = etherealCount + Math.Max(0, shootCount - etherealShoot) + plays;
-
-            if (total <= 0)
-            {
-                return 0;
-            }
-
-            icon = power.Icon;
-            return total * power.Amount;
-        }
-#endif
+        // 怒放（Florescence）：V0.113.2 起改为
+        //   「选一张手牌变成 The Shot，自身 Exhaust」
+        // **不再消耗其他 Shoot 牌**，所以这里不再为它特判——
+        // 走下面的通用逻辑（自身 Exhaust 触发一次）即可（2026-11-25 补丁适配）。
 
         int count = etherealCount;
 
@@ -6274,83 +6470,8 @@ public static class BlockPreviewDisplay
         return count * power.Amount;
     }
 
-    /// <summary>
-    /// 「怒放」会消耗的牌数：所有带 `CardTag.Shoot` 且**不在消耗堆**里的牌。
-    /// 复刻 `Florescence.OnPlay` 的判据（遍历 `PlayerCombatState.AllCards`），
-    /// 所以手牌 / 抽牌堆 / 弃牌堆 / 打出堆里的射击牌都算，
-    /// **包括以前生成过、还没消耗的 `TheShot`**（它自己也带 `CardTag.Shoot`）。
-    /// </summary>
-    private static int CountShootCardsOutsideExhaust(Player player)
-    {
-#if STS2_FOOL
-        try
-        {
-            var state = player.PlayerCombatState;
-
-            if (state == null)
-            {
-                return 0;
-            }
-
-            int count = 0;
-
-            foreach (var c in state.AllCards)
-            {
-                if (c.Tags.Contains(CardTag.Shoot) && c.Pile?.Type != PileType.Exhaust)
-                {
-                    count++;
-                }
-            }
-
-            return count;
-        }
-        catch (Exception e)
-        {
-            GD.Print($"[{MainFile.ModId}] 统计射击牌失败: {e.Message}");
-            return 0;
-        }
-#else
-        return 0;
-#endif
-    }
-
-    /// <summary>
-    /// 手牌里「**既是虚无、又带 Shoot 标签**」的牌数。
-    /// 这些牌被怒放提前烧掉是**净增 0**（回合结束本来也要烧），
-    /// 它们已经计入 `etherealCount`，所以要从怒放的消耗数里减掉，避免重复。
-    /// </summary>
-    private static int CountEtherealShootInHand(CardModel? card, Player player)
-    {
-#if STS2_FOOL
-        try
-        {
-            int count = 0;
-
-            foreach (var handCard in PileType.Hand.GetPile(player).Cards)
-            {
-                if (handCard == card)
-                {
-                    continue;
-                }
-
-                if (handCard.Keywords.Contains(CardKeyword.Ethereal)
-                    && handCard.Tags.Contains(CardTag.Shoot))
-                {
-                    count++;
-                }
-            }
-
-            return count;
-        }
-        catch (Exception e)
-        {
-            GD.Print($"[{MainFile.ModId}] 统计虚无射击牌失败: {e.Message}");
-            return 0;
-        }
-#else
-        return 0;
-#endif
-    }
+    // `CountShootCardsOutsideExhaust` / `CountEtherealShootInHand` 已删除：
+    // 它们只服务于旧版「怒放 = 烧光所有 Shoot 牌」的逻辑，V0.113.2 重做后不再需要（2026-11-25 补丁适配）。
 
     /// <summary>
     /// 手牌里有多少张虚无牌（Ethereal），排除正在拖的那张。
@@ -6407,14 +6528,8 @@ public static class BlockPreviewDisplay
         }
 
         // 这些牌的烧牌全部发生在打出时，没有"回合结束才消耗"的成分。
-        // 怒放（Florescence）也归这一类：它在 OnPlay 里立刻烧光所有射击牌。
-        // （严格说它算的 `etherealCount` 里还有非射击的虚无牌属于回合结束，
-        //  这里按"全部立即"处理偏保守 —— 只有非射击虚无牌很多时才会影响奥里哈刚判断。）
-#if STS2_FOOL
-        if (card is Stoke or SecondWind or FiendFire or Havoc or Thrash or Purity or Florescence)
-#else
+        // ⚠️ 怒放（Florescence）自 V0.113.2 起不再烧其他牌，已从名单移除（2026-11-25 补丁适配）。
         if (card is Stoke or SecondWind or FiendFire or Havoc or Thrash or Purity)
-#endif
         {
             return feelNoPainBlock;
         }
