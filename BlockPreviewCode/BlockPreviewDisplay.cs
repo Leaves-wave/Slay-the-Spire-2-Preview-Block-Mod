@@ -2361,9 +2361,9 @@ public static class BlockPreviewDisplay
         // 奥斯提生命：它替玩家挨伤害，等于一层自带壁垒的护盾（背景状态，与打哪张牌无关）
         int ostyHpBlock = GetOstyHpBlock(creature, out var ostyHpIcon);
 
-        // 牺牲会把骨手直接杀掉，打完这张牌那层「生命护盾」就不存在了，
-        // 不能还挂在总值里误导玩家（它换来的是一次性的 3 倍最大生命格挡）。
-        if (card is Sacrifice)
+        // 牺牲 / 骨片会把骨手直接杀掉，打完这张牌那层「生命护盾」就不存在了，
+        // 不能还挂在总值里误导玩家（2026-11-25 补上 BoneShards）。
+        if (card is Sacrifice or BoneShards)
         {
             ostyHpBlock = 0;
             ostyHpIcon = null;
