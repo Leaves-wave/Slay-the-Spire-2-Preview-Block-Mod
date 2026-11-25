@@ -2114,7 +2114,15 @@ public static class BlockPreviewDisplay
 
         if (BlockPreviewConfig.ShowIncomingDamage)
         {
-            if (frozenSide == CombatSide.Enemy && _frozenIncomingSide == CombatSide.Player)
+            // 结束回合流程一开始就冻结：`CurrentSide` 切到 Enemy 有延迟，
+            // 这期间格挡逐段被消耗会让红色数字乱跳（2026-11-25）。
+            var combatManager = CombatManager.Instance;
+            bool turnIsEnding = combatManager != null
+                && (combatManager.EndingPlayerTurnPhaseOne
+                    || combatManager.EndingPlayerTurnPhaseTwo
+                    || combatManager.IsEnemyTurnStarted);
+
+            if (turnIsEnding && _frozenIncomingSide == CombatSide.Player)
             {
                 persistentIncoming = _frozenIncoming;
                 persistentUnblockable = _frozenUnblockable;
@@ -2123,12 +2131,13 @@ public static class BlockPreviewDisplay
             else
             {
                 persistentIncoming = GetIncomingDamage(
-                    _playerCreature!, persistentCertain, out persistentFatal, out persistentUnblockable);
+                    _playerCreature!, Math.Max(0, persistentCertain - ostyHpBlock),
+                    out persistentFatal, out persistentUnblockable);
 
                 _frozenIncoming = persistentIncoming;
                 _frozenUnblockable = persistentUnblockable;
                 _frozenFatal = persistentFatal;
-                _frozenIncomingSide = frozenSide;
+                _frozenIncomingSide = turnIsEnding ? CombatSide.Enemy : CombatSide.Player;
             }
         }
 
@@ -2729,7 +2738,7 @@ public static class BlockPreviewDisplay
         if (BlockPreviewConfig.ShowIncomingDamage)
         {
             incomingDamage = GetIncomingDamage(
-                creature, certainTotal, out incomingFatal, out incomingUnblockable,
+                creature, realBlock, out incomingFatal, out incomingUnblockable,
                 card, GetHoverTarget(card!));
         }
 
@@ -2970,11 +2979,23 @@ public static class BlockPreviewDisplay
             return 0;
         }
 
-        int blockable = attack + constrict + disintegration + handCurse;
-        int blockableUnblocked = Math.Max(0, blockable - block);
+        // ⚠️ 奥斯提（`DieForYouPower`）只能替玩家挡**怪物攻击**，
+        // 手牌 / 状态伤害只能由玩家自己的格挡吸收（2026-11-25 修正）。
+        int ostyBlock = GetOstyHpBlock(creature, out _);
+
+        // 玩家格挡**只有一份**：先抵「手牌/状态」伤害，剩余的再抵攻击。
+        // （状态在回合结束时结算，早于敌人回合的攻击；否则同一份格挡会被扣两次）
+        int otherBlockable = constrict + disintegration + handCurse;
+        int otherUnblocked = Math.Max(0, otherBlockable - block);
+        int blockLeftForAttack = Math.Max(0, block - otherBlockable);
+
+        // 攻击：剩余玩家格挡 + 奥斯提承伤都能挡
+        int attackUnblocked = Math.Max(0, attack - blockLeftForAttack - ostyBlock);
+
+        int blockableUnblocked = attackUnblocked + otherUnblocked;
 
         // 孤注一掷只认「未被格挡的**攻击**伤害」，缠绕/毒/诅咒都不触发
-        bool attackHits = attack > 0 && attack > block;
+        bool attackHits = attackUnblocked > 0;
         int totalUnblockable = poison + handCurseUnblockable;
 
         // 心脏碎片：每回合最多失去 20 点生命（只限制"失去生命"部分）
